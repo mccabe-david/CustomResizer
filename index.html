@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Photo Resizer</title>
+<style>
+  :root {
+    --bg: #faf7f2;
+    --card: #ffffff;
+    --accent: #7c5cbf;
+    --accent-dark: #64489e;
+    --text: #3a3540;
+    --muted: #8a8494;
+    --border: #e6e0d8;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 2rem 1rem;
+  }
+  h1 { font-size: 2rem; margin-bottom: 0.5rem; text-align: center; }
+  .subtitle { color: var(--muted); margin-bottom: 2rem; text-align: center; font-size: 1.1rem; }
+  .card {
+    background: var(--card);
+    border-radius: 16px;
+    box-shadow: 0 2px 12px rgba(60, 50, 80, 0.08);
+    padding: 2rem;
+    width: 100%;
+    max-width: 560px;
+    margin-bottom: 1.5rem;
+  }
+  #dropzone {
+    border: 3px dashed var(--border);
+    border-radius: 12px;
+    padding: 3rem 1.5rem;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color 0.2s, background 0.2s;
+  }
+  #dropzone.dragover { border-color: var(--accent); background: #f5f0ff; }
+  #dropzone .big-icon { font-size: 3rem; display: block; margin-bottom: 0.75rem; }
+  #dropzone p { font-size: 1.15rem; margin-bottom: 0.4rem; }
+  #dropzone .hint { color: var(--muted); font-size: 0.95rem; }
+  #file-input { display: none; }
+  .sizes { margin-top: 1.5rem; }
+  .sizes h2 { font-size: 1.05rem; margin-bottom: 0.75rem; }
+  .size-option {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.5rem 0.25rem;
+    font-size: 1.05rem;
+    cursor: pointer;
+  }
+  .size-option input { width: 1.25rem; height: 1.25rem; accent-color: var(--accent); cursor: pointer; }
+  .size-option .dims { color: var(--muted); font-size: 0.92rem; margin-left: auto; }
+  #preview-area { display: none; text-align: center; margin-top: 1.5rem; }
+  #preview-area img {
+    max-width: 100%;
+    max-height: 260px;
+    border-radius: 10px;
+    box-shadow: 0 1px 6px rgba(0,0,0,0.15);
+  }
+  #photo-name { margin-top: 0.6rem; color: var(--muted); font-size: 0.95rem; word-break: break-all; }
+  #go-button {
+    display: none;
+    width: 100%;
+    margin-top: 1.5rem;
+    padding: 1rem;
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: #fff;
+    background: var(--accent);
+    border: none;
+    border-radius: 12px;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+  #go-button:hover { background: var(--accent-dark); }
+  #go-button:disabled { background: #b9aed3; cursor: wait; }
+  #status { display: none; margin-top: 1rem; text-align: center; font-size: 1.05rem; color: var(--accent-dark); }
+  #status.error { color: #b3403f; }
+  footer { color: var(--muted); font-size: 0.88rem; text-align: center; max-width: 480px; line-height: 1.5; }
+</style>
+</head>
+<body>
+
+<h1>📷 Photo Resizer</h1>
+<p class="subtitle">Pick a photo and get every size you need, all at once.</p>
+
+<div class="card">
+  <div id="dropzone">
+    <span class="big-icon">🖼️</span>
+    <p><strong>Click here to choose a photo</strong></p>
+    <p class="hint">or drag one onto this box</p>
+  </div>
+  <input type="file" id="file-input" accept="image/*">
+
+  <div id="preview-area">
+    <img id="preview-img" alt="Your photo">
+    <p id="photo-name"></p>
+  </div>
+
+  <div class="sizes">
+    <h2>Which sizes would you like?</h2>
+    <label class="size-option"><input type="checkbox" value="2048" checked> Extra large <span class="dims">2048&nbsp;px</span></label>
+    <label class="size-option"><input type="checkbox" value="1600" checked> Large <span class="dims">1600&nbsp;px</span></label>
+    <label class="size-option"><input type="checkbox" value="1200" checked> Medium <span class="dims">1200&nbsp;px</span></label>
+    <label class="size-option"><input type="checkbox" value="800" checked> Small <span class="dims">800&nbsp;px</span></label>
+    <label class="size-option"><input type="checkbox" value="400" checked> Thumbnail <span class="dims">400&nbsp;px</span></label>
+  </div>
+
+  <button id="go-button">Make my sizes ⬇</button>
+  <p id="status"></p>
+</div>
+
+<footer>
+  Your photo never leaves your computer — all the resizing happens right here in your browser.
+</footer>
+
+<script>
+"use strict";
+
+/* ---------- tiny zip writer (STORE method — JPEGs are already compressed) ---------- */
+
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = (c & 1) ? 0xEDB88320 ^ (c >>> 1) : c >>> 1;
+    t[n] = c;
+  }
+  return t;
+})();
+
+function crc32(bytes) {
+  let c = 0xFFFFFFFF;
+  for (let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+
+function dosDateTime(d) {
+  const time = (d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1);
+  const date = ((d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate();
+  return { time, date };
+}
+
+// files: [{ name: string, data: Uint8Array }] -> zip file bytes
+function buildZip(files) {
+  const now = dosDateTime(new Date());
+  const encoder = new TextEncoder();
+  const chunks = [];
+  const central = [];
+  let offset = 0;
+
+  const u16 = (v) => new Uint8Array([v & 0xFF, (v >> 8) & 0xFF]);
+  const u32 = (v) => new Uint8Array([v & 0xFF, (v >>> 8) & 0xFF, (v >>> 16) & 0xFF, (v >>> 24) & 0xFF]);
+
+  for (const f of files) {
+    const nameBytes = encoder.encode(f.name);
+    const crc = crc32(f.data);
+    const common = [
+      u16(20),            // version needed
+      u16(0),             // flags
+      u16(0),             // method: store
+      u16(now.time), u16(now.date),
+      u32(crc),
+      u32(f.data.length), // compressed size (= uncompressed for store)
+      u32(f.data.length), // uncompressed size
+      u16(nameBytes.length),
+      u16(0),             // extra length
+    ];
+    const local = [u32(0x04034B50), ...common, nameBytes, f.data];
+    central.push([
+      u32(0x02014B50), u16(20), ...common,
+      u16(0), u16(0), u16(0), u32(0), // comment len, disk, internal attrs, external attrs
+      u32(offset), nameBytes,
+    ]);
+    for (const part of local) { chunks.push(part); offset += part.length; }
+  }
+
+  const cdStart = offset;
+  let cdSize = 0;
+  for (const record of central) {
+    for (const part of record) { chunks.push(part); cdSize += part.length; }
+  }
+  chunks.push(
+    u32(0x06054B50), u16(0), u16(0),
+    u16(files.length), u16(files.length),
+    u32(cdSize), u32(cdStart), u16(0)
+  );
+
+  const total = chunks.reduce((sum, c) => sum + c.length, 0);
+  const out = new Uint8Array(total);
+  let pos = 0;
+  for (const c of chunks) { out.set(c, pos); pos += c.length; }
+  return out;
+}
+
+/* ---------- image resizing ---------- */
+
+async function loadImage(file) {
+  // imageOrientation: 'from-image' respects EXIF rotation from phone cameras
+  try {
+    return await createImageBitmap(file, { imageOrientation: "from-image" });
+  } catch {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error("could not read image"));
+      img.src = URL.createObjectURL(file);
+    });
+  }
+}
+
+function resizeToBlob(image, targetLongSide) {
+  const srcW = image.width, srcH = image.height;
+  const scale = Math.min(1, targetLongSide / Math.max(srcW, srcH)); // never upscale
+  const w = Math.round(srcW * scale);
+  const h = Math.round(srcH * scale);
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(image, 0, 0, w, h);
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(
+      (blob) => blob ? resolve({ blob, w, h }) : reject(new Error("resize failed")),
+      "image/jpeg",
+      0.9
+    );
+  });
+}
+
+/* ---------- page wiring ---------- */
+
+const dropzone = document.getElementById("dropzone");
+const fileInput = document.getElementById("file-input");
+const previewArea = document.getElementById("preview-area");
+const previewImg = document.getElementById("preview-img");
+const photoName = document.getElementById("photo-name");
+const goButton = document.getElementById("go-button");
+const status = document.getElementById("status");
+
+let currentFile = null;
+
+function setStatus(message, isError) {
+  status.style.display = message ? "block" : "none";
+  status.textContent = message || "";
+  status.classList.toggle("error", !!isError);
+}
+
+function acceptFile(file) {
+  if (!file) return;
+  if (!file.type.startsWith("image/")) {
+    setStatus("That doesn't look like a photo — please pick an image file (like a .jpg or .png).", true);
+    return;
+  }
+  currentFile = file;
+  previewImg.src = URL.createObjectURL(file);
+  photoName.textContent = file.name;
+  previewArea.style.display = "block";
+  goButton.style.display = "block";
+  setStatus("");
+}
+
+dropzone.addEventListener("click", () => fileInput.click());
+fileInput.addEventListener("change", () => acceptFile(fileInput.files[0]));
+
+dropzone.addEventListener("dragover", (e) => { e.preventDefault(); dropzone.classList.add("dragover"); });
+dropzone.addEventListener("dragleave", () => dropzone.classList.remove("dragover"));
+dropzone.addEventListener("drop", (e) => {
+  e.preventDefault();
+  dropzone.classList.remove("dragover");
+  acceptFile(e.dataTransfer.files[0]);
+});
+
+async function makeSizes(file, sizes) {
+  const image = await loadImage(file);
+  const baseName = file.name.replace(/\.[^.]+$/, "") || "photo";
+  const seen = new Set();
+  const entries = [];
+  for (const size of sizes) {
+    const { blob, w, h } = await resizeToBlob(image, size);
+    const key = w + "x" + h;
+    if (seen.has(key)) continue; // photo smaller than several targets -> avoid duplicates
+    seen.add(key);
+    entries.push({
+      name: `${baseName}-${w}x${h}.jpg`,
+      data: new Uint8Array(await blob.arrayBuffer()),
+    });
+  }
+  return buildZip(entries);
+}
+
+goButton.addEventListener("click", async () => {
+  const sizes = [...document.querySelectorAll(".size-option input:checked")]
+    .map((box) => parseInt(box.value, 10));
+  if (!sizes.length) {
+    setStatus("Please tick at least one size first.", true);
+    return;
+  }
+  goButton.disabled = true;
+  setStatus("Making your sizes… ✨");
+  try {
+    const zipBytes = await makeSizes(currentFile, sizes);
+    const zipName = (currentFile.name.replace(/\.[^.]+$/, "") || "photo") + "-sizes.zip";
+    const url = URL.createObjectURL(new Blob([zipBytes], { type: "application/zip" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = zipName;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    setStatus("Done! Check your Downloads folder for " + zipName + " 🎉");
+  } catch (err) {
+    setStatus("Sorry, something went wrong: " + err.message, true);
+  } finally {
+    goButton.disabled = false;
+  }
+});
+</script>
+</body>
+</html>
