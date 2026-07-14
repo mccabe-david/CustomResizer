@@ -7,9 +7,6 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display&family=WindSong:wght@500&display=swap" rel="stylesheet">
-<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4/dist/tf.min.js" defer></script>
-<script src="https://cdn.jsdelivr.net/npm/@upscalerjs/esrgan-medium@1.0.0/dist/umd/models/esrgan-medium/src/x4/index.min.js" defer></script>
-<script src="https://cdn.jsdelivr.net/npm/upscaler@1/dist/browser/umd/upscaler.min.js" defer></script>
 <style>
   @font-face {
     font-family: "MoonTime";
@@ -264,39 +261,116 @@ function neededScale(image, formats) {
   }, 0);
 }
 
+// The enhancement runs in a Web Worker: worker threads are exempt from the
+// timer/rAF throttling that freezes hidden tabs (so switching tabs during the
+// multi-minute sharpen is fine), and the page stays responsive. Inside the
+// worker the photo is processed as small overlapping tiles, so the GPU only
+// ever holds one ~144px tile — one-shot upscaling of the whole photo can
+// exhaust GPU memory and silently produce a black image.
+const WORKER_SOURCE = `
+  // tf.nextFrame() awaits requestAnimationFrame, which may never fire in a
+  // worker — replace it with an unthrottled timer before tf.js loads
+  self.requestAnimationFrame = (cb) => setTimeout(() => cb(performance.now()), 0);
+  importScripts(
+    "https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4/dist/tf.min.js",
+    "https://cdn.jsdelivr.net/npm/@upscalerjs/esrgan-medium@1.0.0/dist/umd/models/esrgan-medium/src/x4/index.min.js",
+    "https://cdn.jsdelivr.net/npm/upscaler@1/dist/browser/umd/upscaler.min.js"
+  );
+  let upscaler = null;
+  self.onmessage = async (e) => {
+    const { width: W, height: H, data } = e.data;
+    const SCALE = 4, TILE = 128, OVERLAP = 8;
+    try {
+      upscaler = upscaler || new Upscaler({ model: ESRGANMedium4x });
+      const rgba = new Uint8ClampedArray(data);
+      const rgb = new Int32Array(W * H * 3);
+      for (let i = 0; i < W * H; i++) {
+        rgb[i * 3] = rgba[i * 4];
+        rgb[i * 3 + 1] = rgba[i * 4 + 1];
+        rgb[i * 3 + 2] = rgba[i * 4 + 2];
+      }
+      const full = tf.tensor3d(rgb, [H, W, 3], "int32");
+      const DW = W * SCALE, DH = H * SCALE;
+      const out = new Uint8ClampedArray(DW * DH * 4);
+      const cols = Math.ceil(W / TILE), rows = Math.ceil(H / TILE);
+      let done = 0;
+      for (let y = 0; y < H; y += TILE) {
+        for (let x = 0; x < W; x += TILE) {
+          // read the tile plus a margin so seams get cropped away
+          const x0 = Math.max(0, x - OVERLAP), y0 = Math.max(0, y - OVERLAP);
+          const x1 = Math.min(W, x + TILE + OVERLAP), y1 = Math.min(H, y + TILE + OVERLAP);
+          const input = tf.slice(full, [y0, x0, 0], [y1 - y0, x1 - x0, 3]);
+          const result = await upscaler.upscale(input, { output: "tensor" });
+          input.dispose();
+          const pixels = await result.data();
+          const ow = (x1 - x0) * SCALE;
+          result.dispose();
+          const tw = Math.min(TILE, W - x), th = Math.min(TILE, H - y);
+          const offX = (x - x0) * SCALE, offY = (y - y0) * SCALE;
+          for (let r = 0; r < th * SCALE; r++) {
+            const srcRow = (offY + r) * ow + offX;
+            const dstRow = (y * SCALE + r) * DW + x * SCALE;
+            for (let c = 0; c < tw * SCALE; c++) {
+              const si = (srcRow + c) * 3, di = (dstRow + c) * 4;
+              out[di] = pixels[si];
+              out[di + 1] = pixels[si + 1];
+              out[di + 2] = pixels[si + 2];
+              out[di + 3] = 255;
+            }
+          }
+          self.postMessage({ progress: ++done / (cols * rows) });
+        }
+      }
+      full.dispose();
+      self.postMessage({ done: true, width: DW, height: DH, data: out.buffer }, [out.buffer]);
+    } catch (err) {
+      self.postMessage({ error: err.message });
+    }
+  };
+`;
+
+let enhanceWorker = null;
+
 async function enhancePhoto(image, cacheKey, onProgress) {
   if (upscaleCache.key === cacheKey) return upscaleCache.image;
-  if (typeof Upscaler === "undefined" || typeof ESRGANMedium4x === "undefined") {
-    throw new Error("the AI sharpening tools are still loading — please try again in a few seconds");
-  }
-  const upscaler = new Upscaler({ model: ESRGANMedium4x });
+  enhanceWorker = enhanceWorker ||
+    new Worker(URL.createObjectURL(new Blob([WORKER_SOURCE], { type: "text/javascript" })));
+  // hand the worker raw pixels (it has no DOM to decode images with)
   const src = document.createElement("canvas");
   src.width = image.width;
   src.height = image.height;
-  src.getContext("2d").drawImage(image, 0, 0);
-  const input = tf.browser.fromPixels(src);
-  try {
-    const output = await upscaler.upscale(input, {
-      output: "tensor",
-      patchSize: 128,
-      padding: 4,
-      progress: (p) => onProgress(p),
-    });
-    const dst = document.createElement("canvas");
-    dst.width = output.shape[1];
-    dst.height = output.shape[0];
-    // model output is float 0-255; toPixels wants int32 (or floats in 0-1)
-    const pixels = tf.tidy(() => output.clipByValue(0, 255).round().cast("int32"));
-    output.dispose();
-    await tf.browser.toPixels(pixels, dst);
-    pixels.dispose();
-    const enhanced = await createImageBitmap(dst);
-    upscaleCache = { key: cacheKey, image: enhanced };
-    return enhanced;
-  } finally {
-    input.dispose();
-    upscaler.dispose();
+  const sctx = src.getContext("2d");
+  sctx.drawImage(image, 0, 0);
+  const imageData = sctx.getImageData(0, 0, image.width, image.height);
+  src.width = src.height = 0;
+
+  const result = await new Promise((resolve, reject) => {
+    enhanceWorker.onmessage = (e) => {
+      if (e.data.progress !== undefined) onProgress(e.data.progress);
+      else if (e.data.error) reject(new Error(e.data.error));
+      else if (e.data.done) resolve(e.data);
+    };
+    enhanceWorker.onerror = (e) => reject(new Error(e.message || "enhancement failed"));
+    enhanceWorker.postMessage(
+      { width: image.width, height: image.height, data: imageData.data.buffer },
+      [imageData.data.buffer]
+    );
+  });
+
+  const pixels = new Uint8ClampedArray(result.data);
+  // sanity check: if the GPU silently failed, the result is pure black —
+  // better to print the original photo than a black box
+  let inkFound = false;
+  for (let i = 0; i < pixels.length && !inkFound; i += 40001 * 4) {
+    if (pixels[i] + pixels[i + 1] + pixels[i + 2] > 0) inkFound = true;
   }
+  if (!inkFound) throw new Error("enhancement produced a black image on this device");
+
+  const enhanced = await createImageBitmap(
+    new ImageData(pixels, result.width, result.height)
+  );
+  upscaleCache = { key: cacheKey, image: enhanced };
+  return enhanced;
 }
 
 /* ---------- the print design ---------- */
@@ -533,9 +607,15 @@ goButton.addEventListener("click", async () => {
     let image = currentImage;
     if (neededScale(image, picked) > UPSCALE_THRESHOLD) {
       setStatus("Sharpening your photo for big prints… this one-time step can take a few minutes ☕");
-      image = await enhancePhoto(image, currentFileKey, (p) => {
-        setStatus(`Sharpening your photo for big prints… ${Math.round(p * 100)}% ☕`);
-      });
+      try {
+        image = await enhancePhoto(image, currentFileKey, (p) => {
+          setStatus(`Sharpening your photo for big prints… ${Math.round(p * 100)}% ☕`);
+        });
+      } catch (err) {
+        // never block the prints on the AI step — use the original photo instead
+        console.warn("photo enhancement failed, using original photo:", err);
+        image = currentImage;
+      }
     }
     const baseName = slugify(cityInput.value) ||
       slugify(currentFileName.replace(/\.[^.]+$/, "")) || "photo";
@@ -546,6 +626,7 @@ goButton.addEventListener("click", async () => {
       const blob = await new Promise((resolve, reject) => {
         design.toBlob((b) => b ? resolve(b) : reject(new Error("could not save " + f.label)), "image/jpeg", 0.9);
       });
+      design.width = design.height = 0; // release canvas memory right away (Safari cares)
       entries.push({
         name: `${baseName}-${f.id}.jpg`,
         data: new Uint8Array(await blob.arrayBuffer()),
