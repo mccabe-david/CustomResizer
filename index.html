@@ -7,6 +7,9 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display&family=WindSong:wght@500&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4/dist/tf.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/@upscalerjs/esrgan-medium@1.0.0/dist/umd/models/esrgan-medium/src/x4/index.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/upscaler@1/dist/browser/umd/upscaler.min.js" defer></script>
 <style>
   @font-face {
     font-family: "MoonTime";
@@ -89,6 +92,7 @@
   }
   .size-option input { width: 1.25rem; height: 1.25rem; accent-color: var(--accent); cursor: pointer; }
   .size-option .dims { color: var(--muted); font-size: 0.92rem; margin-left: auto; }
+  .size-group { color: var(--muted); font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.05em; margin: 0.9rem 0 0.2rem; }
   #go-button {
     display: none;
     width: 100%;
@@ -138,12 +142,8 @@
   </div>
 
   <div class="sizes">
-    <h2>Which sizes would you like?</h2>
-    <label class="size-option"><input type="checkbox" value="2048" checked> Extra large <span class="dims">2048&nbsp;px</span></label>
-    <label class="size-option"><input type="checkbox" value="1600" checked> Large <span class="dims">1600&nbsp;px</span></label>
-    <label class="size-option"><input type="checkbox" value="1200" checked> Medium <span class="dims">1200&nbsp;px</span></label>
-    <label class="size-option"><input type="checkbox" value="800" checked> Small <span class="dims">800&nbsp;px</span></label>
-    <label class="size-option"><input type="checkbox" value="400" checked> Thumbnail <span class="dims">400&nbsp;px</span></label>
+    <h2>Which print sizes would you like?</h2>
+    <div id="format-list"></div>
   </div>
 
   <button id="go-button">Make my sizes ⬇</button>
@@ -151,7 +151,7 @@
 </div>
 
 <footer>
-  Your photo never leaves your computer — all the design work happens right here in your browser.
+  Your photo never leaves your computer — the design work, and even the AI sharpening for big prints, all happen right here in your browser.
 </footer>
 
 <script>
@@ -249,31 +249,81 @@ async function loadImage(file) {
   }
 }
 
-function resizeToBlob(image, targetLongSide) {
-  const srcW = image.width, srcH = image.height;
-  const scale = Math.min(1, targetLongSide / Math.max(srcW, srcH)); // never upscale
-  const w = Math.round(srcW * scale);
-  const h = Math.round(srcH * scale);
-  const canvas = document.createElement("canvas");
-  canvas.width = w;
-  canvas.height = h;
-  const ctx = canvas.getContext("2d");
-  ctx.imageSmoothingEnabled = true;
-  ctx.imageSmoothingQuality = "high";
-  ctx.drawImage(image, 0, 0, w, h);
-  return new Promise((resolve, reject) => {
-    canvas.toBlob(
-      (blob) => blob ? resolve({ blob, w, h }) : reject(new Error("resize failed")),
-      "image/jpeg",
-      0.9
-    );
-  });
+/* ---------- AI photo enhancement (Real-ESRGAN in the browser via UpscalerJS) ---------- */
+
+// Photos are only enhanced when a selected print actually needs more pixels
+// than the original has (stretch factor above 1.5x). The model runs locally
+// on the GPU — the photo still never leaves the computer.
+const UPSCALE_THRESHOLD = 1.5;
+let upscaleCache = { key: null, image: null };
+
+function neededScale(image, formats) {
+  return formats.reduce((worst, f) => {
+    const frame = photoFrame(f.w, f.h);
+    return Math.max(worst, frame.w / image.width, frame.h / image.height);
+  }, 0);
+}
+
+async function enhancePhoto(image, cacheKey, onProgress) {
+  if (upscaleCache.key === cacheKey) return upscaleCache.image;
+  if (typeof Upscaler === "undefined" || typeof ESRGANMedium4x === "undefined") {
+    throw new Error("the AI sharpening tools are still loading — please try again in a few seconds");
+  }
+  const upscaler = new Upscaler({ model: ESRGANMedium4x });
+  const src = document.createElement("canvas");
+  src.width = image.width;
+  src.height = image.height;
+  src.getContext("2d").drawImage(image, 0, 0);
+  const input = tf.browser.fromPixels(src);
+  try {
+    const output = await upscaler.upscale(input, {
+      output: "tensor",
+      patchSize: 128,
+      padding: 4,
+      progress: (p) => onProgress(p),
+    });
+    const dst = document.createElement("canvas");
+    dst.width = output.shape[1];
+    dst.height = output.shape[0];
+    // model output is float 0-255; toPixels wants int32 (or floats in 0-1)
+    const pixels = tf.tidy(() => output.clipByValue(0, 255).round().cast("int32"));
+    output.dispose();
+    await tf.browser.toPixels(pixels, dst);
+    pixels.dispose();
+    const enhanced = await createImageBitmap(dst);
+    upscaleCache = { key: cacheKey, image: enhanced };
+    return enhanced;
+  } finally {
+    input.dispose();
+    upscaler.dispose();
+  }
 }
 
 /* ---------- the print design ---------- */
 
 const DESIGN_W = 1500;
-const DESIGN_H = 2100; // 5:7
+const DESIGN_H = 2100; // 5:7 (preview size; exports render natively per format)
+
+// Print formats. Pixel sizes are 300 DPI except the 24x36 poster (200 DPI,
+// which is standard at that viewing distance and keeps the canvas manageable).
+const FORMATS = [
+  { id: "4x6",    label: "4×6 in",            group: "Small prints", w: 1200, h: 1800, checked: true },
+  { id: "5x7",    label: "5×7 in",            group: "Small prints", w: 1500, h: 2100, checked: true },
+  { id: "8x10",   label: "8×10 in",           group: "Medium prints", w: 2400, h: 3000, checked: true },
+  { id: "11x14",  label: "11×14 in",          group: "Medium prints", w: 3300, h: 4200, checked: true },
+  { id: "a4",     label: "A4 (21×29.7 cm)",   group: "International", w: 2480, h: 3508, checked: true },
+  { id: "a3",     label: "A3 (29.7×42 cm)",   group: "International", w: 3508, h: 4961 },
+  { id: "a2",     label: "A2 (42×59.4 cm)",   group: "International", w: 4961, h: 7016 },
+  { id: "16x20",  label: "16×20 in",          group: "Large prints", w: 4800, h: 6000 },
+  { id: "18x24",  label: "18×24 in",          group: "Large prints", w: 5400, h: 7200 },
+  { id: "24x36",  label: "24×36 in (poster)", group: "Large prints", w: 4800, h: 7200 },
+  { id: "10x10",  label: "10×10 in (square)", group: "Square", w: 3000, h: 3000 },
+];
+
+// The photo frame within a W x H design (see renderDesign)
+function photoFrame(W, H) {
+  return { w: Math.round(W * 0.89), h: Math.round(H * (0.72 - 0.08)) };
+}
 
 const TITLE_FONT = '"Playfair Display"';
 const SCRIPT_FONT = '"MoonTime", "WindSong"'; // WindSong is the fallback if the OTF fails
@@ -305,28 +355,32 @@ function measureSpacedWidth(ctx, text, spacing) {
   return widths.reduce((a, b) => a + b, 0) + spacing * (widths.length - 1);
 }
 
-// Compose the 1500x2100 design onto `canvas` (or a new one) and return it.
-async function renderDesign(image, city, region, canvas) {
+// Compose the design onto `canvas` (or a new one) at W x H and return it.
+// The layout is proportional: positions track the canvas height, text sizes
+// track the canvas width (tuned against reference prints at 1500x2100).
+async function renderDesign(image, city, region, canvas, W, H) {
   await ensureFonts();
+  W = W || DESIGN_W;
+  H = H || DESIGN_H;
+  const k = W / 1500; // text scale factor
   canvas = canvas || document.createElement("canvas");
-  canvas.width = DESIGN_W;
-  canvas.height = DESIGN_H;
+  canvas.width = W;
+  canvas.height = H;
   const ctx = canvas.getContext("2d");
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = "high";
 
   // white background
   ctx.fillStyle = "#ffffff";
-  ctx.fillRect(0, 0, DESIGN_W, DESIGN_H);
+  ctx.fillRect(0, 0, W, H);
 
   // photo: 89% of canvas width, centered; band from 8% to 72% of canvas height
   // (averaged from five reference prints — the 72% bottom edge is consistent
   // across all of them), cropped to fill the frame
   if (image) {
-    const frameW = Math.round(DESIGN_W * 0.89);
-    const frameH = Math.round(DESIGN_H * (0.72 - 0.08));
-    const frameX = Math.round((DESIGN_W - frameW) / 2);
-    const frameY = Math.round(DESIGN_H * 0.08);
+    const { w: frameW, h: frameH } = photoFrame(W, H);
+    const frameX = Math.round((W - frameW) / 2);
+    const frameY = Math.round(H * 0.08);
     const scale = Math.max(frameW / image.width, frameH / image.height);
     const srcW = frameW / scale;
     const srcH = frameH / scale;
@@ -347,12 +401,12 @@ async function renderDesign(image, city, region, canvas) {
     const template = `{size}px ${TITLE_FONT}`;
     ctx.font = template.replace("{size}", 100);
     const w100 = measureSpacedWidth(ctx, cityText, spacingEm * 100);
-    const size = Math.min(100, 100 * (DESIGN_W * 0.84) / w100);
+    const size = Math.min(100 * k, 100 * (W * 0.84) / w100);
     ctx.font = template.replace("{size}", size);
     const m = ctx.measureText(cityText);
-    const baselineY = DESIGN_H * 0.81 +
+    const baselineY = H * 0.81 +
       (m.actualBoundingBoxAscent - m.actualBoundingBoxDescent) / 2;
-    drawSpacedText(ctx, cityText, DESIGN_W / 2, baselineY, spacingEm * size);
+    drawSpacedText(ctx, cityText, W / 2, baselineY, spacingEm * size);
   }
 
   // state/country: MoonTime script. References imply 154-225px (mean ~190) with
@@ -364,13 +418,13 @@ async function renderDesign(image, city, region, canvas) {
     const template = `{size}px ${SCRIPT_FONT}`;
     ctx.font = template.replace("{size}", 100);
     const w100 = ctx.measureText(regionText).width;
-    const size = Math.min(190, 100 * (DESIGN_W * 0.45) / w100);
+    const size = Math.min(190 * k, 100 * (W * 0.45) / w100);
     ctx.font = template.replace("{size}", size);
     const m = ctx.measureText(regionText);
     const inkMid = (m.actualBoundingBoxAscent - m.actualBoundingBoxDescent) / 2;
     ctx.textAlign = "center";
     ctx.textBaseline = "alphabetic";
-    ctx.fillText(regionText, DESIGN_W / 2, DESIGN_H * 0.888 + inkMid);
+    ctx.fillText(regionText, W / 2, H * 0.888 + inkMid);
   }
 
   return canvas;
@@ -390,6 +444,7 @@ const status = document.getElementById("status");
 
 let currentImage = null;
 let currentFileName = "";
+let currentFileKey = "";
 
 function setStatus(message, isError) {
   status.style.display = message ? "block" : "none";
@@ -425,6 +480,7 @@ async function acceptFile(file) {
     return;
   }
   currentFileName = file.name;
+  currentFileKey = `${file.name}:${file.size}:${file.lastModified}`;
   photoName.textContent = file.name;
   previewArea.style.display = "block";
   goButton.style.display = "block";
@@ -448,37 +504,56 @@ function slugify(text) {
   return text.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 }
 
-async function makeSizes(design, baseName, sizes) {
-  const seen = new Set();
-  const entries = [];
-  for (const size of sizes) {
-    const { blob, w, h } = await resizeToBlob(design, size);
-    const key = w + "x" + h;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    entries.push({
-      name: `${baseName}-${w}x${h}.jpg`,
-      data: new Uint8Array(await blob.arrayBuffer()),
-    });
+// Build the grouped print-format checkboxes
+const formatList = document.getElementById("format-list");
+let lastGroup = null;
+for (const f of FORMATS) {
+  if (f.group !== lastGroup) {
+    const h = document.createElement("p");
+    h.className = "size-group";
+    h.textContent = f.group;
+    formatList.appendChild(h);
+    lastGroup = f.group;
   }
-  return buildZip(entries);
+  const label = document.createElement("label");
+  label.className = "size-option";
+  label.innerHTML = `<input type="checkbox" value="${f.id}"${f.checked ? " checked" : ""}> ${f.label} <span class="dims">${f.w}×${f.h}&nbsp;px</span>`;
+  formatList.appendChild(label);
 }
 
 goButton.addEventListener("click", async () => {
-  const sizes = [...document.querySelectorAll(".size-option input:checked")]
-    .map((box) => parseInt(box.value, 10));
-  if (!sizes.length) {
-    setStatus("Please tick at least one size first.", true);
+  const picked = [...document.querySelectorAll(".size-option input:checked")]
+    .map((box) => FORMATS.find((f) => f.id === box.value));
+  if (!picked.length) {
+    setStatus("Please tick at least one print size first.", true);
     return;
   }
   goButton.disabled = true;
-  setStatus("Making your sizes… ✨");
   try {
-    const design = await renderDesign(currentImage, cityInput.value, regionInput.value);
+    let image = currentImage;
+    if (neededScale(image, picked) > UPSCALE_THRESHOLD) {
+      setStatus("Sharpening your photo for big prints… this one-time step can take a few minutes ☕");
+      image = await enhancePhoto(image, currentFileKey, (p) => {
+        setStatus(`Sharpening your photo for big prints… ${Math.round(p * 100)}% ☕`);
+      });
+    }
     const baseName = slugify(cityInput.value) ||
       slugify(currentFileName.replace(/\.[^.]+$/, "")) || "photo";
-    const zipBytes = await makeSizes(design, baseName, sizes);
-    const zipName = baseName + "-sizes.zip";
+    const entries = [];
+    for (const f of picked) {
+      setStatus(`Making your ${f.label} print… ✨`);
+      const design = await renderDesign(image, cityInput.value, regionInput.value, null, f.w, f.h);
+      const blob = await new Promise((resolve, reject) => {
+        design.toBlob((b) => b ? resolve(b) : reject(new Error("could not save " + f.label)), "image/jpeg", 0.9);
+      });
+      entries.push({
+        name: `${baseName}-${f.id}.jpg`,
+        data: new Uint8Array(await blob.arrayBuffer()),
+      });
+    }
+    setStatus("Packing your zip… 📦");
+    const zipBytes = buildZip(entries);
+    const zipName = baseName + "-prints.zip";
     const url = URL.createObjectURL(new Blob([zipBytes], { type: "application/zip" }));
     const a = document.createElement("a");
     a.href = url;
