@@ -319,13 +319,14 @@ async function renderDesign(image, city, region, canvas) {
   ctx.fillStyle = "#ffffff";
   ctx.fillRect(0, 0, DESIGN_W, DESIGN_H);
 
-  // photo: 88% of canvas width, centered; band from 9% to 72% of canvas height
-  // (matched to the reference prints' artwork extent), cropped to fill the frame
+  // photo: 89% of canvas width, centered; band from 8% to 72% of canvas height
+  // (averaged from five reference prints — the 72% bottom edge is consistent
+  // across all of them), cropped to fill the frame
   if (image) {
-    const frameW = Math.round(DESIGN_W * 0.88);
-    const frameH = Math.round(DESIGN_H * (0.72 - 0.09));
+    const frameW = Math.round(DESIGN_W * 0.89);
+    const frameH = Math.round(DESIGN_H * (0.72 - 0.08));
     const frameX = Math.round((DESIGN_W - frameW) / 2);
-    const frameY = Math.round(DESIGN_H * 0.09);
+    const frameY = Math.round(DESIGN_H * 0.08);
     const scale = Math.max(frameW / image.width, frameH / image.height);
     const srcW = frameW / scale;
     const srcH = frameH / scale;
@@ -336,39 +337,40 @@ async function renderDesign(image, city, region, canvas) {
 
   ctx.fillStyle = INK;
 
-  // city: Playfair Display regular, ALL CAPS, tracking 0.42em. Sized to span
-  // 43.5% of the width but capped at 95px — reproduces both reference prints
-  // ("BOSTON, MA" -> 66px, "AJO" -> 95px). Full ink band centers at 82% height.
+  // city: Playfair Display regular, ALL CAPS. The five reference prints are
+  // hand-tuned and inconsistent (66-111px, tracking 0.08-0.42em); the best
+  // approximation across them is a fixed 100px at 0.25em tracking, shrinking
+  // only when the name would exceed 84% of the width. Ink band centers at 81%.
   const cityText = (city || "").trim().toUpperCase();
   if (cityText) {
-    const spacingEm = 0.42;
+    const spacingEm = 0.25;
     const template = `{size}px ${TITLE_FONT}`;
     ctx.font = template.replace("{size}", 100);
     const w100 = measureSpacedWidth(ctx, cityText, spacingEm * 100);
-    const size = Math.max(40, Math.min(95, 100 * (DESIGN_W * 0.435) / w100));
+    const size = Math.min(100, 100 * (DESIGN_W * 0.84) / w100);
     ctx.font = template.replace("{size}", size);
     const m = ctx.measureText(cityText);
-    const baselineY = DESIGN_H * 0.82 +
+    const baselineY = DESIGN_H * 0.81 +
       (m.actualBoundingBoxAscent - m.actualBoundingBoxDescent) / 2;
     drawSpacedText(ctx, cityText, DESIGN_W / 2, baselineY, spacingEm * size);
   }
 
-  // state/country: MoonTime script. Sized to span 42.4% of the width, capped at
-  // 225px ("My Hometown" -> 172px, "Arizona" -> 225px in the references).
-  // Ink center at 89.3% height — MoonTime's swashes make the em box sit high,
-  // so center the actual ink, not the em box.
+  // state/country: MoonTime script. References imply 154-225px (mean ~190) with
+  // no clean rule, so: fixed 190px, shrinking past 45% of the width. Ink center
+  // at ~88.8% height — MoonTime's swashes make the em box sit high, so center
+  // the actual ink, not the em box.
   const regionText = (region || "").trim();
   if (regionText) {
     const template = `{size}px ${SCRIPT_FONT}`;
     ctx.font = template.replace("{size}", 100);
     const w100 = ctx.measureText(regionText).width;
-    const size = Math.max(60, Math.min(225, 100 * (DESIGN_W * 0.424) / w100));
+    const size = Math.min(190, 100 * (DESIGN_W * 0.45) / w100);
     ctx.font = template.replace("{size}", size);
     const m = ctx.measureText(regionText);
     const inkMid = (m.actualBoundingBoxAscent - m.actualBoundingBoxDescent) / 2;
     ctx.textAlign = "center";
     ctx.textBaseline = "alphabetic";
-    ctx.fillText(regionText, DESIGN_W / 2, DESIGN_H * 0.893 + inkMid);
+    ctx.fillText(regionText, DESIGN_W / 2, DESIGN_H * 0.888 + inkMid);
   }
 
   return canvas;
