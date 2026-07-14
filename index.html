@@ -288,12 +288,9 @@ async function ensureFonts() {
 
 // Draws text with manual letter spacing (canvas letterSpacing isn't supported everywhere).
 // Returns nothing; assumes ctx.font is already set. spacing is px between characters.
-function drawSpacedText(ctx, text, centerX, centerY, spacing) {
+function drawSpacedText(ctx, text, centerX, baselineY, spacing) {
   ctx.textAlign = "left";
   ctx.textBaseline = "alphabetic";
-  // center the cap-height ink band on centerY (all-caps text has no descenders)
-  const capHeight = ctx.measureText("B").actualBoundingBoxAscent;
-  const baselineY = centerY + capHeight / 2;
   const widths = [...text].map((ch) => ctx.measureText(ch).width);
   const total = widths.reduce((a, b) => a + b, 0) + spacing * (widths.length - 1);
   let x = centerX - total / 2;
@@ -322,13 +319,13 @@ async function renderDesign(image, city, region, canvas) {
   ctx.fillStyle = "#ffffff";
   ctx.fillRect(0, 0, DESIGN_W, DESIGN_H);
 
-  // photo: 86% of canvas width, centered; band from 12% to 70% of canvas height
-  // (matched to the reference print's artwork extent), cropped to fill the frame
+  // photo: 88% of canvas width, centered; band from 9% to 72% of canvas height
+  // (matched to the reference prints' artwork extent), cropped to fill the frame
   if (image) {
-    const frameW = Math.round(DESIGN_W * 0.86);
-    const frameH = Math.round(DESIGN_H * (0.70 - 0.12));
+    const frameW = Math.round(DESIGN_W * 0.88);
+    const frameH = Math.round(DESIGN_H * (0.72 - 0.09));
     const frameX = Math.round((DESIGN_W - frameW) / 2);
-    const frameY = Math.round(DESIGN_H * 0.12);
+    const frameY = Math.round(DESIGN_H * 0.09);
     const scale = Math.max(frameW / image.width, frameH / image.height);
     const srcW = frameW / scale;
     const srcH = frameH / scale;
@@ -339,36 +336,35 @@ async function renderDesign(image, city, region, canvas) {
 
   ctx.fillStyle = INK;
 
-  // city: Playfair Display regular, ALL CAPS, tracking ~0.42em, fixed 66px
-  // (cap height 2.2% of sheet, measured from the reference print); center at 82.5%
-  // height. Long names shrink to stay within 80% of the width.
+  // city: Playfair Display regular, ALL CAPS, tracking 0.42em. Sized to span
+  // 43.5% of the width but capped at 95px — reproduces both reference prints
+  // ("BOSTON, MA" -> 66px, "AJO" -> 95px). Full ink band centers at 82% height.
   const cityText = (city || "").trim().toUpperCase();
   if (cityText) {
     const spacingEm = 0.42;
     const template = `{size}px ${TITLE_FONT}`;
-    let size = 66;
+    ctx.font = template.replace("{size}", 100);
+    const w100 = measureSpacedWidth(ctx, cityText, spacingEm * 100);
+    const size = Math.max(40, Math.min(95, 100 * (DESIGN_W * 0.435) / w100));
     ctx.font = template.replace("{size}", size);
-    const width = measureSpacedWidth(ctx, cityText, spacingEm * size);
-    if (width > DESIGN_W * 0.8) size *= (DESIGN_W * 0.8) / width;
-    ctx.font = template.replace("{size}", size);
-    drawSpacedText(ctx, cityText, DESIGN_W / 2, DESIGN_H * 0.825, spacingEm * size);
+    const m = ctx.measureText(cityText);
+    const baselineY = DESIGN_H * 0.82 +
+      (m.actualBoundingBoxAscent - m.actualBoundingBoxDescent) / 2;
+    drawSpacedText(ctx, cityText, DESIGN_W / 2, baselineY, spacingEm * size);
   }
 
-  // state/country: MoonTime script, fixed 150px (ink height ~6% of sheet, from the
-  // reference); ink center at ~89.3% height. Long names shrink to 45% of the width.
+  // state/country: MoonTime script. Sized to span 42.4% of the width, capped at
+  // 225px ("My Hometown" -> 172px, "Arizona" -> 225px in the references).
+  // Ink center at 89.3% height — MoonTime's swashes make the em box sit high,
+  // so center the actual ink, not the em box.
   const regionText = (region || "").trim();
   if (regionText) {
     const template = `{size}px ${SCRIPT_FONT}`;
-    let size = 150;
+    ctx.font = template.replace("{size}", 100);
+    const w100 = ctx.measureText(regionText).width;
+    const size = Math.max(60, Math.min(225, 100 * (DESIGN_W * 0.424) / w100));
     ctx.font = template.replace("{size}", size);
-    let m = ctx.measureText(regionText);
-    if (m.width > DESIGN_W * 0.45) {
-      size *= (DESIGN_W * 0.45) / m.width;
-      ctx.font = template.replace("{size}", size);
-      m = ctx.measureText(regionText);
-    }
-    // center the actual ink (not the em box) on the target line — MoonTime's
-    // swashes make the em box sit high
+    const m = ctx.measureText(regionText);
     const inkMid = (m.actualBoundingBoxAscent - m.actualBoundingBoxDescent) / 2;
     ctx.textAlign = "center";
     ctx.textBaseline = "alphabetic";
