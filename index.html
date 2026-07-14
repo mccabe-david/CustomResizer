@@ -3,8 +3,16 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Photo Resizer</title>
+<title>Photo Print Maker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@500&family=WindSong:wght@500&display=swap" rel="stylesheet">
 <style>
+  @font-face {
+    font-family: "MoonTime";
+    src: url("fonts/MoonTime-Regular.otf") format("opentype");
+    font-display: swap;
+  }
   :root {
     --bg: #faf7f2;
     --card: #ffffff;
@@ -49,6 +57,26 @@
   #dropzone p { font-size: 1.15rem; margin-bottom: 0.4rem; }
   #dropzone .hint { color: var(--muted); font-size: 0.95rem; }
   #file-input { display: none; }
+  .field { margin-top: 1.25rem; }
+  .field label { display: block; font-size: 1.05rem; font-weight: 600; margin-bottom: 0.4rem; }
+  .field input {
+    width: 100%;
+    padding: 0.75rem 0.9rem;
+    font-size: 1.1rem;
+    border: 2px solid var(--border);
+    border-radius: 10px;
+    color: var(--text);
+    background: #fff;
+  }
+  .field input:focus { outline: none; border-color: var(--accent); }
+  #preview-area { display: none; text-align: center; margin-top: 1.5rem; }
+  #preview-canvas {
+    max-width: 100%;
+    max-height: 420px;
+    border-radius: 6px;
+    box-shadow: 0 1px 8px rgba(0,0,0,0.18);
+  }
+  #photo-name { margin-top: 0.6rem; color: var(--muted); font-size: 0.95rem; word-break: break-all; }
   .sizes { margin-top: 1.5rem; }
   .sizes h2 { font-size: 1.05rem; margin-bottom: 0.75rem; }
   .size-option {
@@ -61,14 +89,6 @@
   }
   .size-option input { width: 1.25rem; height: 1.25rem; accent-color: var(--accent); cursor: pointer; }
   .size-option .dims { color: var(--muted); font-size: 0.92rem; margin-left: auto; }
-  #preview-area { display: none; text-align: center; margin-top: 1.5rem; }
-  #preview-area img {
-    max-width: 100%;
-    max-height: 260px;
-    border-radius: 10px;
-    box-shadow: 0 1px 6px rgba(0,0,0,0.15);
-  }
-  #photo-name { margin-top: 0.6rem; color: var(--muted); font-size: 0.95rem; word-break: break-all; }
   #go-button {
     display: none;
     width: 100%;
@@ -92,8 +112,8 @@
 </head>
 <body>
 
-<h1>📷 Photo Resizer</h1>
-<p class="subtitle">Pick a photo and get every size you need, all at once.</p>
+<h1>📷 Photo Print Maker</h1>
+<p class="subtitle">Pick a photo, add a place name, and get a finished print design in every size.</p>
 
 <div class="card">
   <div id="dropzone">
@@ -103,8 +123,17 @@
   </div>
   <input type="file" id="file-input" accept="image/*">
 
+  <div class="field">
+    <label for="city-input">City</label>
+    <input type="text" id="city-input" placeholder="e.g. Paris" autocomplete="off">
+  </div>
+  <div class="field">
+    <label for="region-input">State or country</label>
+    <input type="text" id="region-input" placeholder="e.g. France" autocomplete="off">
+  </div>
+
   <div id="preview-area">
-    <img id="preview-img" alt="Your photo">
+    <canvas id="preview-canvas" width="1500" height="2100"></canvas>
     <p id="photo-name"></p>
   </div>
 
@@ -122,7 +151,7 @@
 </div>
 
 <footer>
-  Your photo never leaves your computer — all the resizing happens right here in your browser.
+  Your photo never leaves your computer — all the design work happens right here in your browser.
 </footer>
 
 <script>
@@ -204,7 +233,7 @@ function buildZip(files) {
   return out;
 }
 
-/* ---------- image resizing ---------- */
+/* ---------- image loading & resizing ---------- */
 
 async function loadImage(file) {
   // imageOrientation: 'from-image' respects EXIF rotation from phone cameras
@@ -241,17 +270,121 @@ function resizeToBlob(image, targetLongSide) {
   });
 }
 
+/* ---------- the print design ---------- */
+
+const DESIGN_W = 1500;
+const DESIGN_H = 2100; // 5:7
+
+const TITLE_FONT = '"Playfair Display"';
+const SCRIPT_FONT = '"MoonTime", "WindSong"'; // WindSong is the fallback if the OTF fails
+const INK = "#1E1E1E";
+
+async function ensureFonts() {
+  await Promise.all([
+    document.fonts.load(`500 100px ${TITLE_FONT}`),
+    document.fonts.load(`100px ${SCRIPT_FONT}`),
+  ]);
+}
+
+// Draws text with manual letter spacing (canvas letterSpacing isn't supported everywhere).
+// Returns nothing; assumes ctx.font is already set. spacing is px between characters.
+function drawSpacedText(ctx, text, centerX, centerY, spacing) {
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  const widths = [...text].map((ch) => ctx.measureText(ch).width);
+  const total = widths.reduce((a, b) => a + b, 0) + spacing * (widths.length - 1);
+  let x = centerX - total / 2;
+  [...text].forEach((ch, i) => {
+    ctx.fillText(ch, x, centerY);
+    x += widths[i] + spacing;
+  });
+}
+
+function measureSpacedWidth(ctx, text, spacing) {
+  const widths = [...text].map((ch) => ctx.measureText(ch).width);
+  return widths.reduce((a, b) => a + b, 0) + spacing * (widths.length - 1);
+}
+
+// Find the font size (px) at which `text` spans targetWidth, clamped.
+function fitFontSize(ctx, text, fontTemplate, targetWidth, spacingEm, minPx, maxPx) {
+  const refSize = 100;
+  ctx.font = fontTemplate.replace("{size}", refSize);
+  const refWidth = measureSpacedWidth(ctx, text, spacingEm * refSize);
+  if (refWidth <= 0) return minPx;
+  return Math.max(minPx, Math.min(maxPx, refSize * (targetWidth / refWidth)));
+}
+
+// Compose the 1500x2100 design onto `canvas` (or a new one) and return it.
+async function renderDesign(image, city, region, canvas) {
+  await ensureFonts();
+  canvas = canvas || document.createElement("canvas");
+  canvas.width = DESIGN_W;
+  canvas.height = DESIGN_H;
+  const ctx = canvas.getContext("2d");
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+
+  // white background
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, DESIGN_W, DESIGN_H);
+
+  // photo: 83% of canvas width, centered; band from 16% to 68% of canvas height,
+  // cropped to fill the frame (like a Canva frame)
+  if (image) {
+    const frameW = Math.round(DESIGN_W * 0.83);
+    const frameH = Math.round(DESIGN_H * (0.68 - 0.16));
+    const frameX = Math.round((DESIGN_W - frameW) / 2);
+    const frameY = Math.round(DESIGN_H * 0.16);
+    const scale = Math.max(frameW / image.width, frameH / image.height);
+    const srcW = frameW / scale;
+    const srcH = frameH / scale;
+    const srcX = (image.width - srcW) / 2;
+    const srcY = (image.height - srcH) / 2;
+    ctx.drawImage(image, srcX, srcY, srcW, srcH, frameX, frameY, frameW, frameH);
+  }
+
+  ctx.fillStyle = INK;
+
+  // city: Playfair Display, ALL CAPS, letter-spaced ~0.27em, spans ~2/3 of width,
+  // vertical center at ~73.5% of canvas height
+  const cityText = (city || "").trim().toUpperCase();
+  if (cityText) {
+    const spacingEm = 0.27;
+    const template = `500 {size}px ${TITLE_FONT}`;
+    const size = fitFontSize(ctx, cityText, template, DESIGN_W * 0.66, spacingEm, 40, 175);
+    ctx.font = template.replace("{size}", size);
+    drawSpacedText(ctx, cityText, DESIGN_W / 2, DESIGN_H * 0.735, spacingEm * size);
+  }
+
+  // state/country: WindSong script, spans ~37% of width, centered at ~88.5% height
+  // (band 84-93% leaves room for the long swashes)
+  const regionText = (region || "").trim();
+  if (regionText) {
+    const template = `{size}px ${SCRIPT_FONT}`;
+    let size = fitFontSize(ctx, regionText, template, DESIGN_W * 0.375, 0, 40, 130);
+    ctx.font = template.replace("{size}", size);
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(regionText, DESIGN_W / 2, DESIGN_H * 0.885);
+  }
+
+  return canvas;
+}
+
 /* ---------- page wiring ---------- */
 
 const dropzone = document.getElementById("dropzone");
 const fileInput = document.getElementById("file-input");
+const cityInput = document.getElementById("city-input");
+const regionInput = document.getElementById("region-input");
 const previewArea = document.getElementById("preview-area");
-const previewImg = document.getElementById("preview-img");
+const previewCanvas = document.getElementById("preview-canvas");
 const photoName = document.getElementById("photo-name");
 const goButton = document.getElementById("go-button");
 const status = document.getElementById("status");
 
-let currentFile = null;
+let currentImage = null;
+let currentFileName = "";
 
 function setStatus(message, isError) {
   status.style.display = message ? "block" : "none";
@@ -259,22 +392,44 @@ function setStatus(message, isError) {
   status.classList.toggle("error", !!isError);
 }
 
-function acceptFile(file) {
+let previewPending = false;
+function schedulePreview() {
+  if (!currentImage || previewPending) return;
+  previewPending = true;
+  requestAnimationFrame(async () => {
+    previewPending = false;
+    try {
+      await renderDesign(currentImage, cityInput.value, regionInput.value, previewCanvas);
+    } catch (err) {
+      setStatus("Could not draw the preview: " + err.message, true);
+    }
+  });
+}
+
+async function acceptFile(file) {
   if (!file) return;
   if (!file.type.startsWith("image/")) {
     setStatus("That doesn't look like a photo — please pick an image file (like a .jpg or .png).", true);
     return;
   }
-  currentFile = file;
-  previewImg.src = URL.createObjectURL(file);
+  setStatus("");
+  try {
+    currentImage = await loadImage(file);
+  } catch {
+    setStatus("Sorry, that photo could not be opened.", true);
+    return;
+  }
+  currentFileName = file.name;
   photoName.textContent = file.name;
   previewArea.style.display = "block";
   goButton.style.display = "block";
-  setStatus("");
+  schedulePreview();
 }
 
 dropzone.addEventListener("click", () => fileInput.click());
 fileInput.addEventListener("change", () => acceptFile(fileInput.files[0]));
+cityInput.addEventListener("input", schedulePreview);
+regionInput.addEventListener("input", schedulePreview);
 
 dropzone.addEventListener("dragover", (e) => { e.preventDefault(); dropzone.classList.add("dragover"); });
 dropzone.addEventListener("dragleave", () => dropzone.classList.remove("dragover"));
@@ -284,15 +439,17 @@ dropzone.addEventListener("drop", (e) => {
   acceptFile(e.dataTransfer.files[0]);
 });
 
-async function makeSizes(file, sizes) {
-  const image = await loadImage(file);
-  const baseName = file.name.replace(/\.[^.]+$/, "") || "photo";
+function slugify(text) {
+  return text.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+}
+
+async function makeSizes(design, baseName, sizes) {
   const seen = new Set();
   const entries = [];
   for (const size of sizes) {
-    const { blob, w, h } = await resizeToBlob(image, size);
+    const { blob, w, h } = await resizeToBlob(design, size);
     const key = w + "x" + h;
-    if (seen.has(key)) continue; // photo smaller than several targets -> avoid duplicates
+    if (seen.has(key)) continue;
     seen.add(key);
     entries.push({
       name: `${baseName}-${w}x${h}.jpg`,
@@ -312,8 +469,11 @@ goButton.addEventListener("click", async () => {
   goButton.disabled = true;
   setStatus("Making your sizes… ✨");
   try {
-    const zipBytes = await makeSizes(currentFile, sizes);
-    const zipName = (currentFile.name.replace(/\.[^.]+$/, "") || "photo") + "-sizes.zip";
+    const design = await renderDesign(currentImage, cityInput.value, regionInput.value);
+    const baseName = slugify(cityInput.value) ||
+      slugify(currentFileName.replace(/\.[^.]+$/, "")) || "photo";
+    const zipBytes = await makeSizes(design, baseName, sizes);
+    const zipName = baseName + "-sizes.zip";
     const url = URL.createObjectURL(new Blob([zipBytes], { type: "application/zip" }));
     const a = document.createElement("a");
     a.href = url;
