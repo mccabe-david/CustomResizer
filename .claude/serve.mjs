@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { join, normalize } from "node:path";
 
 const root = process.cwd();
-const types = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".png": "image/png", ".jpg": "image/jpeg", ".otf": "font/otf" };
+const types = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".png": "image/png", ".jpg": "image/jpeg", ".otf": "font/otf", ".ttf": "font/ttf" };
 
 createServer(async (req, res) => {
   let path = decodeURIComponent(new URL(req.url, "http://x").pathname);

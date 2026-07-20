@@ -332,15 +332,19 @@ function analyzeArt(image) {
 // bitmap becomes the working image everywhere downstream (render + upscale).
 async function prepareArt(image) {
   const { bg, box } = analyzeArt(image);
-  if (box.x === 0 && box.y === 0 && box.w === image.width && box.h === image.height) {
-    return { image, bg };
-  }
   const c = document.createElement("canvas");
   c.width = box.w; c.height = box.h;
-  c.getContext("2d").drawImage(image, box.x, box.y, box.w, box.h, 0, 0, box.w, box.h);
-  const trimmed = await createImageBitmap(c);
+  const cx = c.getContext("2d");
+  // Flatten onto the paper tone first: this trims to the content box AND makes
+  // the art opaque. The AI-upscale worker drops the alpha channel, so a
+  // transparent PNG would otherwise upscale with a black background — filling
+  // the paper tone here (the same tone the canvas uses) keeps it seamless.
+  cx.fillStyle = bg;
+  cx.fillRect(0, 0, box.w, box.h);
+  cx.drawImage(image, box.x, box.y, box.w, box.h, 0, 0, box.w, box.h);
+  const prepared = await createImageBitmap(c);
   c.width = c.height = 0;
-  return { image: trimmed, bg };
+  return { image: prepared, bg };
 }
 
 /* ---------- AI photo enhancement (Real-ESRGAN in the browser via UpscalerJS) ---------- */
