@@ -1,0 +1,5 @@
+.DS_Store
+*.log
+_samples/
+_samples_buffalo.png
+node_modules/

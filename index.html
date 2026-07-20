@@ -6,11 +6,11 @@
 <title>Photo Print Maker</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Playfair+Display&family=WindSong:wght@500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Radley&family=WindSong:wght@500&display=swap" rel="stylesheet">
 <style>
   @font-face {
-    font-family: "MoonTime";
-    src: url("fonts/MoonTime-Regular.otf") format("opentype");
+    font-family: "Beautifully Delicious Script";
+    src: url("fonts/BDScript-Regular.ttf") format("truetype");
     font-display: swap;
   }
   :root {
@@ -246,6 +246,103 @@ async function loadImage(file) {
   }
 }
 
+/* ---------- artwork analysis: background tone + trim blank margins ---------- */
+
+// Many of these prints are watercolor art floating on a near-white "paper"
+// that isn't pure #FFFFFF (some are warm cream). Detect that paper tone so the
+// canvas can be filled to match (no visible seam where the art's edge meets the
+// canvas), and trim the blank margin so the art fills its band and bottom-anchors
+// correctly. Only applied when the background really is a light, uniform paper;
+// edge-to-edge photos fall back to white + no trim.
+function analyzeArt(image) {
+  const AW = 320; // analyze downscaled: fast, and averages away speckle noise
+  const s = Math.min(1, AW / Math.max(image.width, image.height));
+  const w = Math.max(1, Math.round(image.width * s));
+  const h = Math.max(1, Math.round(image.height * s));
+  const c = document.createElement("canvas");
+  c.width = w; c.height = h;
+  const ctx = c.getContext("2d");
+  ctx.drawImage(image, 0, 0, w, h);
+  const d = ctx.getImageData(0, 0, w, h).data;
+
+  // Decide how to separate art from background, and pick the paper tone.
+  //  - transparent PNG  -> content = opaque pixels, paper = white
+  //  - light plain paper -> content = pixels unlike the paper, paper = its tone
+  //  - full-bleed photo  -> no trim, paper = white
+  let borderAlpha = 0, borderN = 0;
+  const alphaAt = (x, y) => d[(y * w + x) * 4 + 3];
+  for (let x = 0; x < w; x++) { borderAlpha += alphaAt(x, 0) + alphaAt(x, h - 1); borderN += 2; }
+  for (let y = 0; y < h; y++) { borderAlpha += alphaAt(0, y) + alphaAt(w - 1, y); borderN += 2; }
+  const transparentBg = borderAlpha / borderN < 128;
+
+  let bg, isInk, minCount;
+  if (transparentBg) {
+    bg = "#ffffff";
+    isInk = (x, y) => d[(y * w + x) * 4 + 3] > 40; // opaque enough to be art
+    minCount = 2; // alpha is a clean signal — keep even thin paint drips
+  } else {
+    // background tone = median of the (opaque) border pixels
+    const ch = [[], [], []];
+    const sample = (x, y) => { const i = (y * w + x) * 4; ch[0].push(d[i]); ch[1].push(d[i + 1]); ch[2].push(d[i + 2]); };
+    for (let x = 0; x < w; x++) { sample(x, 0); sample(x, h - 1); }
+    for (let y = 0; y < h; y++) { sample(0, y); sample(w - 1, y); }
+    const median = (a) => { a.sort((p, q) => p - q); return a[a.length >> 1]; };
+    const tone = [median(ch[0]), median(ch[1]), median(ch[2])];
+
+    // Only treat as art-on-paper when the paper is light and uniform. Otherwise
+    // it's likely a full-bleed photo — keep white and don't trim.
+    const light = tone.every((v) => v >= 225);
+    const spread = Math.max(...ch.map((a) => a[a.length - 1] - a[0]));
+    if (!light || spread > 60) {
+      return { bg: "#ffffff", box: { x: 0, y: 0, w: image.width, h: image.height } };
+    }
+    bg = "#" + tone.map((v) => v.toString(16).padStart(2, "0")).join("");
+    const tol = 14;
+    isInk = (x, y) => {
+      const i = (y * w + x) * 4;
+      return Math.abs(d[i] - tone[0]) > tol || Math.abs(d[i + 1] - tone[1]) > tol || Math.abs(d[i + 2] - tone[2]) > tol;
+    };
+    minCount = 0; // set below from image size
+  }
+
+  // content bbox: rows/cols whose count of art pixels clears a small threshold
+  // (rejects stray specks and faint edge haze)
+  const rows = new Array(h).fill(0), cols = new Array(w).fill(0);
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; x++)
+      if (isInk(x, y)) { rows[y]++; cols[x]++; }
+  const rowMin = minCount || Math.max(2, Math.round(w * 0.01));
+  const colMin = minCount || Math.max(2, Math.round(h * 0.01));
+  let x0 = 0, x1 = w - 1, y0 = 0, y1 = h - 1;
+  while (y0 < y1 && rows[y0] < rowMin) y0++;
+  while (y1 > y0 && rows[y1] < rowMin) y1--;
+  while (x0 < x1 && cols[x0] < colMin) x0++;
+  while (x1 > x0 && cols[x1] < colMin) x1--;
+
+  // map back to full resolution, pad slightly so soft edges aren't clipped
+  const pad = 2;
+  const bx = Math.max(0, Math.round((x0 - pad) / s));
+  const by = Math.max(0, Math.round((y0 - pad) / s));
+  const bw = Math.min(image.width - bx, Math.round((x1 - x0 + 1 + 2 * pad) / s));
+  const bh = Math.min(image.height - by, Math.round((y1 - y0 + 1 + 2 * pad) / s));
+  return { bg, box: { x: bx, y: by, w: bw, h: bh } };
+}
+
+// Trim the art to its content box and report the paper tone. The trimmed
+// bitmap becomes the working image everywhere downstream (render + upscale).
+async function prepareArt(image) {
+  const { bg, box } = analyzeArt(image);
+  if (box.x === 0 && box.y === 0 && box.w === image.width && box.h === image.height) {
+    return { image, bg };
+  }
+  const c = document.createElement("canvas");
+  c.width = box.w; c.height = box.h;
+  c.getContext("2d").drawImage(image, box.x, box.y, box.w, box.h, 0, 0, box.w, box.h);
+  const trimmed = await createImageBitmap(c);
+  c.width = c.height = 0;
+  return { image: trimmed, bg };
+}
+
 /* ---------- AI photo enhancement (Real-ESRGAN in the browser via UpscalerJS) ---------- */
 
 // Photos are only enhanced when a selected print actually needs more pixels
@@ -257,7 +354,8 @@ let upscaleCache = { key: null, image: null };
 function neededScale(image, formats) {
   return formats.reduce((worst, f) => {
     const frame = photoFrame(f.w, f.h);
-    return Math.max(worst, frame.w / image.width, frame.h / image.height);
+    // contain-fit: the photo is drawn at this scale factor
+    return Math.max(worst, Math.min(frame.w / image.width, frame.h / image.height));
   }, 0);
 }
 
@@ -399,14 +497,15 @@ function photoFrame(W, H) {
   return { w: Math.round(W * 0.89), h: Math.round(H * (0.72 - 0.08)) };
 }
 
-const TITLE_FONT = '"Playfair Display"';
-const SCRIPT_FONT = '"MoonTime", "WindSong"'; // WindSong is the fallback if the OTF fails
+const TITLE_FONT = '"Radley"';
+const SCRIPT_FONT = '"Beautifully Delicious Script", "WindSong"'; // WindSong is the fallback if the TTF fails
 const INK = "#1E1E1E";
 
 async function ensureFonts() {
   await Promise.all([
-    document.fonts.load(`100px ${TITLE_FONT}`),
-    document.fonts.load(`100px ${SCRIPT_FONT}`),
+    document.fonts.load('100px "Radley"'),
+    document.fonts.load('100px "Beautifully Delicious Script"'),
+    document.fonts.load('100px "WindSong"'),
   ]);
 }
 
@@ -432,7 +531,7 @@ function measureSpacedWidth(ctx, text, spacing) {
 // Compose the design onto `canvas` (or a new one) at W x H and return it.
 // The layout is proportional: positions track the canvas height, text sizes
 // track the canvas width (tuned against reference prints at 1500x2100).
-async function renderDesign(image, city, region, canvas, W, H) {
+async function renderDesign(image, city, region, canvas, W, H, bg) {
   await ensureFonts();
   W = W || DESIGN_W;
   H = H || DESIGN_H;
@@ -444,31 +543,29 @@ async function renderDesign(image, city, region, canvas, W, H) {
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = "high";
 
-  // white background
-  ctx.fillStyle = "#ffffff";
+  // background: match the art's own paper tone so the art's edge blends
+  // seamlessly into the canvas (defaults to white)
+  ctx.fillStyle = bg || "#ffffff";
   ctx.fillRect(0, 0, W, H);
 
-  // photo: 89% of canvas width, centered; band from 8% to 72% of canvas height
-  // (averaged from five reference prints — the 72% bottom edge is consistent
-  // across all of them), cropped to fill the frame
+  // photo: shown whole (never cropped), scaled to fit a band up to 89% of the
+  // canvas width and spanning 8%-72% of its height, anchored to the band's
+  // bottom edge. This matches the five reference prints: their artwork bottoms
+  // all sit at ~72% while the tops and widths vary with the artwork's shape.
   if (image) {
     const { w: frameW, h: frameH } = photoFrame(W, H);
-    const frameX = Math.round((W - frameW) / 2);
-    const frameY = Math.round(H * 0.08);
-    const scale = Math.max(frameW / image.width, frameH / image.height);
-    const srcW = frameW / scale;
-    const srcH = frameH / scale;
-    const srcX = (image.width - srcW) / 2;
-    const srcY = (image.height - srcH) / 2;
-    ctx.drawImage(image, srcX, srcY, srcW, srcH, frameX, frameY, frameW, frameH);
+    const scale = Math.min(frameW / image.width, frameH / image.height);
+    const w = Math.round(image.width * scale);
+    const h = Math.round(image.height * scale);
+    const x = Math.round((W - w) / 2);
+    const y = Math.round(H * 0.72) - h;
+    ctx.drawImage(image, x, y, w, h);
   }
 
   ctx.fillStyle = INK;
 
-  // city: Playfair Display regular, ALL CAPS. The five reference prints are
-  // hand-tuned and inconsistent (66-111px, tracking 0.08-0.42em); the best
-  // approximation across them is a fixed 100px at 0.25em tracking, shrinking
-  // only when the name would exceed 84% of the width. Ink band centers at 81%.
+  // city: Radley, ALL CAPS, fixed 100px at 0.25em tracking, shrinking only
+  // when the name would exceed 84% of the width. Ink band centers at 81%.
   const cityText = (city || "").trim().toUpperCase();
   if (cityText) {
     const spacingEm = 0.25;
@@ -483,22 +580,28 @@ async function renderDesign(image, city, region, canvas, W, H) {
     drawSpacedText(ctx, cityText, W / 2, baselineY, spacingEm * size);
   }
 
-  // state/country: MoonTime script. References imply 154-225px (mean ~190) with
-  // no clean rule, so: fixed 190px, shrinking past 45% of the width. Ink center
-  // at ~88.8% height — MoonTime's swashes make the em box sit high, so center
-  // the actual ink, not the em box.
+  // state/country: Beautifully Delicious Script. Sized font-agnostically to a
+  // cap height of ~5% of the canvas height (consistent "handwriting size" for
+  // any script font), shrinking past 56% width. Ink center at ~88.5% height —
+  // script fonts sit high in the em box, so center the actual ink, not the box.
   const regionText = (region || "").trim();
   if (regionText) {
     const template = `{size}px ${SCRIPT_FONT}`;
     ctx.font = template.replace("{size}", 100);
+    // Size font-agnostically: target a cap height of ~5% of the canvas height
+    // (so every place name looks the same "handwriting size" regardless of the
+    // script font's own metrics), but shrink long names to stay within 56% width.
+    const capH = ctx.measureText("H").actualBoundingBoxAscent || 50;
     const w100 = ctx.measureText(regionText).width;
-    const size = Math.min(190 * k, 100 * (W * 0.45) / w100);
+    const byCap = 100 * (H * 0.05) / capH;
+    const byWidth = 100 * (W * 0.56) / w100;
+    const size = Math.min(byCap, byWidth);
     ctx.font = template.replace("{size}", size);
     const m = ctx.measureText(regionText);
     const inkMid = (m.actualBoundingBoxAscent - m.actualBoundingBoxDescent) / 2;
     ctx.textAlign = "center";
     ctx.textBaseline = "alphabetic";
-    ctx.fillText(regionText, W / 2, H * 0.888 + inkMid);
+    ctx.fillText(regionText, W / 2, H * 0.885 + inkMid);
   }
 
   return canvas;
@@ -517,6 +620,7 @@ const goButton = document.getElementById("go-button");
 const status = document.getElementById("status");
 
 let currentImage = null;
+let currentBg = "#ffffff";
 let currentFileName = "";
 let currentFileKey = "";
 
@@ -533,7 +637,7 @@ function schedulePreview() {
   requestAnimationFrame(async () => {
     previewPending = false;
     try {
-      await renderDesign(currentImage, cityInput.value, regionInput.value, previewCanvas);
+      await renderDesign(currentImage, cityInput.value, regionInput.value, previewCanvas, undefined, undefined, currentBg);
     } catch (err) {
       setStatus("Could not draw the preview: " + err.message, true);
     }
@@ -548,7 +652,10 @@ async function acceptFile(file) {
   }
   setStatus("");
   try {
-    currentImage = await loadImage(file);
+    const loaded = await loadImage(file);
+    const prepared = await prepareArt(loaded);
+    currentImage = prepared.image;
+    currentBg = prepared.bg;
   } catch {
     setStatus("Sorry, that photo could not be opened.", true);
     return;
@@ -622,7 +729,7 @@ goButton.addEventListener("click", async () => {
     const entries = [];
     for (const f of picked) {
       setStatus(`Making your ${f.label} print… ✨`);
-      const design = await renderDesign(image, cityInput.value, regionInput.value, null, f.w, f.h);
+      const design = await renderDesign(image, cityInput.value, regionInput.value, null, f.w, f.h, currentBg);
       const blob = await new Promise((resolve, reject) => {
         design.toBlob((b) => b ? resolve(b) : reject(new Error("could not save " + f.label)), "image/jpeg", 0.9);
       });
