@@ -9,8 +9,8 @@
 <link href="https://fonts.googleapis.com/css2?family=Radley&family=WindSong:wght@500&display=swap" rel="stylesheet">
 <style>
   @font-face {
-    font-family: "Beautifully Delicious Script";
-    src: url("fonts/BDScript-Regular.ttf") format("truetype");
+    font-family: "Beautifully Delicious Script Bold";
+    src: url("fonts/BDScript-Bold.ttf") format("truetype");
     font-display: swap;
   }
   :root {
@@ -486,25 +486,69 @@ const DESIGN_H = 2100; // 5:7 (preview size; exports render natively per format)
 // ~40 MP; that's still ≥180 DPI at those physical sizes, and beyond the detail
 // the AI-upscaled source art actually carries. Same-ratio sizes above the cap
 // (e.g. 18×24 and 24×32, both 3:4) therefore share pixel dimensions.
+// inW/inH are the physical trim size in inches (A sizes converted from mm) —
+// used to convert the bleed allowance to pixels at each format's effective DPI.
 const FORMATS = [
-  { id: "5x7",    label: "5×7 in",            group: "Small prints", w: 1500, h: 2100, checked: true },
-  { id: "8x10",   label: "8×10 in",           group: "Small prints", w: 2400, h: 3000, checked: true },
-  { id: "9x12",   label: "9×12 in",           group: "Small prints", w: 2700, h: 3600 },
-  { id: "11x14",  label: "11×14 in",          group: "Medium prints", w: 3300, h: 4200, checked: true },
-  { id: "12x16",  label: "12×16 in",          group: "Medium prints", w: 3600, h: 4800 },
-  { id: "16x20",  label: "16×20 in",          group: "Medium prints", w: 4800, h: 6000, checked: true },
-  { id: "18x24",  label: "18×24 in",          group: "Large prints", w: 5400, h: 7200, checked: true },
-  { id: "20x28",  label: "20×28 in",          group: "Large prints", w: 5143, h: 7200 },
-  { id: "24x32",  label: "24×32 in",          group: "Large prints", w: 5400, h: 7200 },
-  { id: "28x40",  label: "28×40 in (poster)", group: "Large prints", w: 5040, h: 7200 },
-  { id: "10x10",  label: "10×10 in",          group: "Square", w: 3000, h: 3000 },
-  { id: "20x20",  label: "20×20 in",          group: "Square", w: 6000, h: 6000 },
-  { id: "a5",     label: "A5 (14.8×21 cm)",   group: "International", w: 1748, h: 2480 },
-  { id: "a4",     label: "A4 (21×29.7 cm)",   group: "International", w: 2480, h: 3508, checked: true },
-  { id: "a3",     label: "A3 (29.7×42 cm)",   group: "International", w: 3508, h: 4961 },
-  { id: "a2",     label: "A2 (42×59.4 cm)",   group: "International", w: 4961, h: 7016 },
-  { id: "a1",     label: "A1 (59.4×84.1 cm)", group: "International", w: 5091, h: 7200 },
+  { id: "5x7",    label: "5×7 in",            group: "Small prints", w: 1500, h: 2100, inW: 5, inH: 7, checked: true },
+  { id: "8x10",   label: "8×10 in",           group: "Small prints", w: 2400, h: 3000, inW: 8, inH: 10, checked: true },
+  { id: "9x12",   label: "9×12 in",           group: "Small prints", w: 2700, h: 3600, inW: 9, inH: 12 },
+  { id: "11x14",  label: "11×14 in",          group: "Medium prints", w: 3300, h: 4200, inW: 11, inH: 14, checked: true },
+  { id: "12x16",  label: "12×16 in",          group: "Medium prints", w: 3600, h: 4800, inW: 12, inH: 16 },
+  { id: "16x20",  label: "16×20 in",          group: "Medium prints", w: 4800, h: 6000, inW: 16, inH: 20, checked: true },
+  { id: "18x24",  label: "18×24 in",          group: "Large prints", w: 5400, h: 7200, inW: 18, inH: 24, checked: true },
+  { id: "20x28",  label: "20×28 in",          group: "Large prints", w: 5143, h: 7200, inW: 20, inH: 28 },
+  { id: "24x32",  label: "24×32 in",          group: "Large prints", w: 5400, h: 7200, inW: 24, inH: 32 },
+  { id: "24x36",  label: "24×36 in (poster)", group: "Large prints", w: 4800, h: 7200, inW: 24, inH: 36 },
+  { id: "28x40",  label: "28×40 in (poster)", group: "Large prints", w: 5040, h: 7200, inW: 28, inH: 40 },
+  { id: "10x10",  label: "10×10 in",          group: "Square", w: 3000, h: 3000, inW: 10, inH: 10 },
+  { id: "20x20",  label: "20×20 in",          group: "Square", w: 6000, h: 6000, inW: 20, inH: 20 },
+  { id: "a5",     label: "A5 (14.8×21 cm)",   group: "International", w: 1748, h: 2480, inW: 5.827, inH: 8.268 },
+  { id: "a4",     label: "A4 (21×29.7 cm)",   group: "International", w: 2480, h: 3508, inW: 8.268, inH: 11.693, checked: true },
+  { id: "a3",     label: "A3 (29.7×42 cm)",   group: "International", w: 3508, h: 4961, inW: 11.693, inH: 16.535 },
+  { id: "a2",     label: "A2 (42×59.4 cm)",   group: "International", w: 4961, h: 7016, inW: 16.535, inH: 23.386 },
+  { id: "a1",     label: "A1 (59.4×84.1 cm)", group: "International", w: 5091, h: 7200, inW: 23.386, inH: 33.110 },
 ];
+
+// Print vendors (Artelo, Gelato) trim up to ~4mm off each edge, so every export
+// carries a 4mm bleed border beyond the trim size. The border mirrors the
+// design's own edges: for the usual white/cream margins that's just more of the
+// paper tone, and for art that reaches the trim line the mirrored strip keeps
+// the edge colors continuous so a trim shift never exposes bare paper.
+const BLEED_MM = 4;
+
+function bleedPx(f) {
+  return Math.round((BLEED_MM / 25.4) * (f.h / f.inH));
+}
+
+// Returns a new canvas of (W+2b) x (H+2b): the design centered, with each
+// edge strip and corner mirrored outward into the bleed border.
+function addBleed(design, b) {
+  const W = design.width, H = design.height;
+  const c = document.createElement("canvas");
+  c.width = W + 2 * b;
+  c.height = H + 2 * b;
+  const ctx = c.getContext("2d");
+  ctx.drawImage(design, b, b);
+  const flips = [
+    // [translateX, translateY, scaleX, scaleY, srcX, srcY, srcW, srcH]
+    [b, b, -1, 1, 0, 0, b, H],                      // left edge
+    [W + 2 * b, b, -1, 1, W - b, 0, b, H],          // right edge
+    [b, b, 1, -1, 0, 0, W, b],                      // top edge
+    [b, H + 2 * b, 1, -1, 0, H - b, W, b],          // bottom edge
+    [b, b, -1, -1, 0, 0, b, b],                     // top-left corner
+    [W + 2 * b, b, -1, -1, W - b, 0, b, b],         // top-right corner
+    [b, H + 2 * b, -1, -1, 0, H - b, b, b],         // bottom-left corner
+    [W + 2 * b, H + 2 * b, -1, -1, W - b, H - b, b, b], // bottom-right corner
+  ];
+  for (const [tx, ty, sx, sy, sX, sY, sW, sH] of flips) {
+    ctx.save();
+    ctx.translate(tx, ty);
+    ctx.scale(sx, sy);
+    ctx.drawImage(design, sX, sY, sW, sH, 0, 0, sW, sH);
+    ctx.restore();
+  }
+  return c;
+}
 
 // The photo frame within a W x H design (see renderDesign)
 function photoFrame(W, H) {
@@ -512,13 +556,13 @@ function photoFrame(W, H) {
 }
 
 const TITLE_FONT = '"Radley"';
-const SCRIPT_FONT = '"Beautifully Delicious Script", "WindSong"'; // WindSong is the fallback if the TTF fails
+const SCRIPT_FONT = '"Beautifully Delicious Script Bold", "WindSong"'; // Bold weight; WindSong is the fallback if the TTF fails
 const INK = "#1E1E1E";
 
 async function ensureFonts() {
   await Promise.all([
     document.fonts.load('100px "Radley"'),
-    document.fonts.load('100px "Beautifully Delicious Script"'),
+    document.fonts.load('100px "Beautifully Delicious Script Bold"'),
     document.fonts.load('100px "WindSong"'),
   ]);
 }
@@ -564,43 +608,54 @@ async function renderDesign(image, city, region, canvas, W, H, bg) {
 
   // Layout constants (overridable via window.__layout while tuning).
   const P = (typeof window !== "undefined" && window.__layout) || {};
-  const ART_TOP     = P.artTop     ?? 0.06;   // art region top (fraction of H)
-  const ART_BOTTOM  = P.artBottom  ?? 0.71;   // art region bottom; text sits below
-  const ART_MAXW    = P.artMaxW    ?? 0.86;   // art never wider than this fraction of W
-  const TITLE_BASE  = P.titleBase  ?? 82;     // title px on a 1500px-wide canvas
-  const TITLE_MAXW  = P.titleMaxW  ?? 0.72;   // title shrinks past this width
-  const TITLE_TRACK = P.titleTrack ?? 0.25;   // title letter spacing (em)
-  const TITLE_Y     = P.titleY     ?? 0.805;  // title ink center (fraction of H)
-  const SCRIPT_CAP  = P.scriptCap  ?? 0.042;  // script cap height (fraction of W)
-  const SCRIPT_MAXW = P.scriptMaxW ?? 0.42;   // script shrinks past this width
-  const SCRIPT_Y    = P.scriptY    ?? 0.89;   // script ink center (fraction of H)
+  const ART_TOP      = P.artTop      ?? 0.075;  // art region top (fraction of H)
+  const ART_BOTTOM   = P.artBottom   ?? 0.735;  // art region bottom; text sits below
+  const MAX_SIDE_CROP = P.maxSideCrop ?? 0.15;  // most the art may crop off EACH side
+  const TITLE_BASE   = P.titleBase   ?? 82;     // title px on a 1500px-wide canvas
+  const TITLE_MAXW   = P.titleMaxW   ?? 0.72;   // title shrinks past this width
+  const TITLE_TRACK  = P.titleTrack  ?? 0.25;   // title letter spacing (em)
+  const TITLE_Y      = P.titleY      ?? 0.815;  // title ink center (fraction of H)
+  const SCRIPT_CAP   = P.scriptCap   ?? 0.042;  // script cap height (fraction of W)
+  const SCRIPT_MAXW  = P.scriptMaxW  ?? 0.42;   // script shrinks past this width
+  const SCRIPT_Y     = P.scriptY     ?? 0.895;  // script ink center (fraction of H)
 
-  // Artwork: fully contained (never cropped, so the watercolor splatter stays
-  // intact), centered both horizontally and vertically within the region above
-  // the text. This gives balanced white margins around the art on every ratio
-  // and keeps it off the top edge.
+  // Artwork: scaled to fill the full vertical art region (so it occupies a
+  // consistent band on every ratio — no "vertical lean"), centered. The top and
+  // bottom of the art are always fully shown; when filling the region makes the
+  // art wider than the page it's cropped equally off the LEFT and RIGHT (up to
+  // MAX_SIDE_CROP), which minimizes white space on tall formats. Square-ish art
+  // on square pages stays narrower than the page, so it simply keeps side margins.
+  // refW = the artwork's displayed width (clamped to the page). The text is
+  // sized against THIS, not the raw page width, so it always sits within the art:
+  // on square pages the art is narrower than the page, so the text scales down to
+  // match instead of overhanging it; on tall pages the art fills the width, so
+  // refW == W and nothing changes.
+  let refW = W;
   if (image) {
-    const maxW = W * ART_MAXW;
     const regionTop = H * ART_TOP;
     const regionH = H * (ART_BOTTOM - ART_TOP);
-    const scale = Math.min(maxW / image.width, regionH / image.height);
-    const w = Math.round(image.width * scale);
-    const h = Math.round(image.height * scale);
-    const x = Math.round((W - w) / 2);
+    let scale = regionH / image.height;          // fill the vertical region
+    let w = image.width * scale;
+    const maxW = W / (1 - 2 * MAX_SIDE_CROP);     // cap how much gets cropped off the sides
+    if (w > maxW) { scale = maxW / image.width; w = image.width * scale; }
+    const h = image.height * scale;
+    const x = Math.round((W - w) / 2);            // centered; negative x crops the sides
     const y = Math.round(regionTop + (regionH - h) / 2);
-    ctx.drawImage(image, x, y, w, h);
+    ctx.drawImage(image, x, y, Math.round(w), Math.round(h));
+    refW = Math.min(w, W);
   }
 
   ctx.fillStyle = INK;
 
-  // city: Radley, ALL CAPS. Sized off canvas width so it stays proportional
-  // across ratios; shrinks only if the name would exceed TITLE_MAXW of the width.
+  // city: Radley, ALL CAPS. Sized off the artwork width (refW) so it stays
+  // proportional to the art on every ratio; shrinks if the name would exceed
+  // TITLE_MAXW of that width.
   const cityText = (city || "").trim().toUpperCase();
   if (cityText) {
     const template = `{size}px ${TITLE_FONT}`;
     ctx.font = template.replace("{size}", 100);
     const w100 = measureSpacedWidth(ctx, cityText, TITLE_TRACK * 100);
-    const size = Math.min(TITLE_BASE * k, 100 * (W * TITLE_MAXW) / w100);
+    const size = Math.min(TITLE_BASE * (refW / 1500), 100 * (refW * TITLE_MAXW) / w100);
     ctx.font = template.replace("{size}", size);
     const m = ctx.measureText(cityText);
     const baselineY = H * TITLE_Y +
@@ -619,15 +674,26 @@ async function renderDesign(image, city, region, canvas, W, H, bg) {
     ctx.font = template.replace("{size}", 100);
     const capH = ctx.measureText("H").actualBoundingBoxAscent || 50;
     const w100 = ctx.measureText(regionText).width;
-    const byCap = 100 * (W * SCRIPT_CAP) / capH;
-    const byWidth = 100 * (W * SCRIPT_MAXW) / w100;
+    const byCap = 100 * (refW * SCRIPT_CAP) / capH;
+    const byWidth = 100 * (refW * SCRIPT_MAXW) / w100;
     const size = Math.min(byCap, byWidth);
     ctx.font = template.replace("{size}", size);
     const m = ctx.measureText(regionText);
     const inkMid = (m.actualBoundingBoxAscent - m.actualBoundingBoxDescent) / 2;
     ctx.textAlign = "center";
     ctx.textBaseline = "alphabetic";
-    ctx.fillText(regionText, W / 2, H * SCRIPT_Y + inkMid);
+    const y = H * SCRIPT_Y + inkMid;
+    // The script's own strokes are thin; a proportional outline thickens them so
+    // the weight reads consistently after JPEGs are downsampled to thumbnails
+    // (thin strokes otherwise render lighter at heavy downscales).
+    const weight = size * (P.scriptWeight ?? 0.014);
+    if (weight > 0) {
+      ctx.lineJoin = "round";
+      ctx.lineWidth = weight;
+      ctx.strokeStyle = INK;
+      ctx.strokeText(regionText, W / 2, y);
+    }
+    ctx.fillText(regionText, W / 2, y);
   }
 
   return canvas;
@@ -724,7 +790,8 @@ for (const f of FORMATS) {
   }
   const label = document.createElement("label");
   label.className = "size-option";
-  label.innerHTML = `<input type="checkbox" value="${f.id}"${f.checked ? " checked" : ""}> ${f.label} <span class="dims">${f.w}×${f.h}&nbsp;px</span>`;
+  const b = bleedPx(f);
+  label.innerHTML = `<input type="checkbox" value="${f.id}"${f.checked ? " checked" : ""}> ${f.label} <span class="dims">${f.w + 2 * b}×${f.h + 2 * b}&nbsp;px</span>`;
   formatList.appendChild(label);
 }
 
@@ -756,10 +823,12 @@ goButton.addEventListener("click", async () => {
     for (const f of picked) {
       setStatus(`Making your ${f.label} print… ✨`);
       const design = await renderDesign(image, cityInput.value, regionInput.value, null, f.w, f.h, currentBg);
-      const blob = await new Promise((resolve, reject) => {
-        design.toBlob((b) => b ? resolve(b) : reject(new Error("could not save " + f.label)), "image/jpeg", 0.9);
-      });
+      const withBleed = addBleed(design, bleedPx(f));
       design.width = design.height = 0; // release canvas memory right away (Safari cares)
+      const blob = await new Promise((resolve, reject) => {
+        withBleed.toBlob((b) => b ? resolve(b) : reject(new Error("could not save " + f.label)), "image/jpeg", 0.9);
+      });
+      withBleed.width = withBleed.height = 0;
       entries.push({
         name: `${baseName}-${f.id}.jpg`,
         data: new Uint8Array(await blob.arrayBuffer()),
