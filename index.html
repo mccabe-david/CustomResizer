@@ -562,60 +562,72 @@ async function renderDesign(image, city, region, canvas, W, H, bg) {
   ctx.fillStyle = bg || "#ffffff";
   ctx.fillRect(0, 0, W, H);
 
-  // photo: shown whole (never cropped), scaled to fit a band up to 89% of the
-  // canvas width and spanning 8%-72% of its height, anchored to the band's
-  // bottom edge. This matches the five reference prints: their artwork bottoms
-  // all sit at ~72% while the tops and widths vary with the artwork's shape.
+  // Layout constants (overridable via window.__layout while tuning).
+  const P = (typeof window !== "undefined" && window.__layout) || {};
+  const ART_TOP     = P.artTop     ?? 0.06;   // art region top (fraction of H)
+  const ART_BOTTOM  = P.artBottom  ?? 0.71;   // art region bottom; text sits below
+  const ART_MAXW    = P.artMaxW    ?? 0.86;   // art never wider than this fraction of W
+  const TITLE_BASE  = P.titleBase  ?? 82;     // title px on a 1500px-wide canvas
+  const TITLE_MAXW  = P.titleMaxW  ?? 0.72;   // title shrinks past this width
+  const TITLE_TRACK = P.titleTrack ?? 0.25;   // title letter spacing (em)
+  const TITLE_Y     = P.titleY     ?? 0.805;  // title ink center (fraction of H)
+  const SCRIPT_CAP  = P.scriptCap  ?? 0.042;  // script cap height (fraction of W)
+  const SCRIPT_MAXW = P.scriptMaxW ?? 0.42;   // script shrinks past this width
+  const SCRIPT_Y    = P.scriptY    ?? 0.89;   // script ink center (fraction of H)
+
+  // Artwork: fully contained (never cropped, so the watercolor splatter stays
+  // intact), centered both horizontally and vertically within the region above
+  // the text. This gives balanced white margins around the art on every ratio
+  // and keeps it off the top edge.
   if (image) {
-    const { w: frameW, h: frameH } = photoFrame(W, H);
-    const scale = Math.min(frameW / image.width, frameH / image.height);
+    const maxW = W * ART_MAXW;
+    const regionTop = H * ART_TOP;
+    const regionH = H * (ART_BOTTOM - ART_TOP);
+    const scale = Math.min(maxW / image.width, regionH / image.height);
     const w = Math.round(image.width * scale);
     const h = Math.round(image.height * scale);
     const x = Math.round((W - w) / 2);
-    const y = Math.round(H * 0.72) - h;
+    const y = Math.round(regionTop + (regionH - h) / 2);
     ctx.drawImage(image, x, y, w, h);
   }
 
   ctx.fillStyle = INK;
 
-  // city: Radley, ALL CAPS, fixed 100px at 0.25em tracking, shrinking only
-  // when the name would exceed 84% of the width. Ink band centers at 81%.
+  // city: Radley, ALL CAPS. Sized off canvas width so it stays proportional
+  // across ratios; shrinks only if the name would exceed TITLE_MAXW of the width.
   const cityText = (city || "").trim().toUpperCase();
   if (cityText) {
-    const spacingEm = 0.25;
     const template = `{size}px ${TITLE_FONT}`;
     ctx.font = template.replace("{size}", 100);
-    const w100 = measureSpacedWidth(ctx, cityText, spacingEm * 100);
-    const size = Math.min(100 * k, 100 * (W * 0.84) / w100);
+    const w100 = measureSpacedWidth(ctx, cityText, TITLE_TRACK * 100);
+    const size = Math.min(TITLE_BASE * k, 100 * (W * TITLE_MAXW) / w100);
     ctx.font = template.replace("{size}", size);
     const m = ctx.measureText(cityText);
-    const baselineY = H * 0.81 +
+    const baselineY = H * TITLE_Y +
       (m.actualBoundingBoxAscent - m.actualBoundingBoxDescent) / 2;
-    drawSpacedText(ctx, cityText, W / 2, baselineY, spacingEm * size);
+    drawSpacedText(ctx, cityText, W / 2, baselineY, TITLE_TRACK * size);
   }
 
-  // state/country: Beautifully Delicious Script. Sized off the canvas WIDTH (like
-  // the title) so the city↔state proportion stays constant across every aspect
-  // ratio — height-based sizing made the script drift bigger on tall prints and
-  // smaller on square ones. Target cap height ~7% of width (equals the old ~5%
-  // of height on the 5×7 reference), shrinking long names past 56% width. Ink
-  // center at ~88.5% height — script fonts sit high in the em box, so center the
-  // actual ink, not the box.
+  // state/country: Beautifully Delicious Script, kept subordinate to the title
+  // (smaller, so it doesn't pull attention from the art). Sized off canvas width
+  // to a fixed cap height, shrinking long names past SCRIPT_MAXW of the width.
+  // Ink centered at SCRIPT_Y — script fonts sit high in the em box, so center
+  // the actual ink, not the box.
   const regionText = (region || "").trim();
   if (regionText) {
     const template = `{size}px ${SCRIPT_FONT}`;
     ctx.font = template.replace("{size}", 100);
     const capH = ctx.measureText("H").actualBoundingBoxAscent || 50;
     const w100 = ctx.measureText(regionText).width;
-    const byCap = 100 * (W * 0.07) / capH;
-    const byWidth = 100 * (W * 0.56) / w100;
+    const byCap = 100 * (W * SCRIPT_CAP) / capH;
+    const byWidth = 100 * (W * SCRIPT_MAXW) / w100;
     const size = Math.min(byCap, byWidth);
     ctx.font = template.replace("{size}", size);
     const m = ctx.measureText(regionText);
     const inkMid = (m.actualBoundingBoxAscent - m.actualBoundingBoxDescent) / 2;
     ctx.textAlign = "center";
     ctx.textBaseline = "alphabetic";
-    ctx.fillText(regionText, W / 2, H * 0.885 + inkMid);
+    ctx.fillText(regionText, W / 2, H * SCRIPT_Y + inkMid);
   }
 
   return canvas;
