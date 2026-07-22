@@ -611,13 +611,13 @@ async function renderDesign(image, city, region, canvas, W, H, bg) {
   const ART_TOP      = P.artTop      ?? 0.075;  // art region top (fraction of H)
   const ART_BOTTOM   = P.artBottom   ?? 0.735;  // art region bottom; text sits below
   const SIDE_MARGIN  = P.sideMargin  ?? 0.08;   // white margin kept on EACH side (non-square)
-  const TITLE_BASE   = P.titleBase   ?? 95;     // title px on a 1500px-wide canvas (short names)
-  const TITLE_MAXW   = P.titleMaxW   ?? 0.72;   // title shrinks past this width
-  const TITLE_TRACK  = P.titleTrack  ?? 0.25;   // title letter spacing (em)
+  const TITLE_BASE   = P.titleBase   ?? 125;    // title px on a 1500px-wide canvas (short names)
+  const TITLE_MAXW   = P.titleMaxW   ?? 0.90;   // title shrinks past this width
+  const TITLE_TRACK  = P.titleTrack  ?? 0.10;   // title letter spacing (em)
   const TITLE_Y      = P.titleY      ?? 0.815;  // title ink center (fraction of H)
   const SCRIPT_CAP   = P.scriptCap   ?? 0.042;  // script cap height (fraction of W)
   const SCRIPT_MAXW  = P.scriptMaxW  ?? 0.42;   // script shrinks past this width
-  const SCRIPT_Y     = P.scriptY     ?? 0.895;  // script ink center (fraction of H)
+  const SCRIPT_TOP   = P.scriptTop   ?? 0.868;  // script ink TOP (fraction of H)
 
   // Artwork: scaled to fill the full vertical art region (so it occupies a
   // consistent band on every ratio — no "vertical lean"), centered. The top and
@@ -683,8 +683,10 @@ async function renderDesign(image, city, region, canvas, W, H, bg) {
   // state/country: Beautifully Delicious Script, kept subordinate to the title
   // (smaller, so it doesn't pull attention from the art). Sized off canvas width
   // to a fixed cap height, shrinking long names past SCRIPT_MAXW of the width.
-  // Ink centered at SCRIPT_Y — script fonts sit high in the em box, so center
-  // the actual ink, not the box.
+  // Ink TOP pinned at SCRIPT_TOP so the gap below the title reads the same for
+  // every word — per-word ink height varies a lot in this font (e.g. "Mexico"
+  // has a short M and no descenders), so centering the ink makes short-ink
+  // words sit visibly lower.
   const regionText = (region || "").trim();
   if (regionText) {
     const template = `{size}px ${SCRIPT_FONT}`;
@@ -696,14 +698,13 @@ async function renderDesign(image, city, region, canvas, W, H, bg) {
     const size = Math.min(byCap, byWidth);
     ctx.font = template.replace("{size}", size);
     const m = ctx.measureText(regionText);
-    const inkMid = (m.actualBoundingBoxAscent - m.actualBoundingBoxDescent) / 2;
     ctx.textAlign = "center";
     ctx.textBaseline = "alphabetic";
-    const y = H * SCRIPT_Y + inkMid;
+    const y = H * SCRIPT_TOP + m.actualBoundingBoxAscent;
     // The script's own strokes are thin; a proportional outline thickens them so
     // the weight reads consistently after JPEGs are downsampled to thumbnails
     // (thin strokes otherwise render lighter at heavy downscales).
-    const weight = size * (P.scriptWeight ?? 0.008);
+    const weight = size * (P.scriptWeight ?? 0.002);
     if (weight > 0) {
       ctx.lineJoin = "round";
       ctx.lineWidth = weight;
