@@ -610,7 +610,7 @@ async function renderDesign(image, city, region, canvas, W, H, bg) {
   const P = (typeof window !== "undefined" && window.__layout) || {};
   const ART_TOP      = P.artTop      ?? 0.075;  // art region top (fraction of H)
   const ART_BOTTOM   = P.artBottom   ?? 0.735;  // art region bottom; text sits below
-  const SIDE_MARGIN  = P.sideMargin  ?? 0.08;   // white margin kept on EACH side (non-square)
+  const SIDE_MARGIN  = P.sideMargin  ?? 0.06;   // white margin kept on EACH side (non-square)
   const TITLE_BASE   = P.titleBase   ?? 125;    // title px on a 1500px-wide canvas (short names)
   const TITLE_MAXW   = P.titleMaxW   ?? 0.90;   // title shrinks past this width
   const TITLE_TRACK  = P.titleTrack  ?? 0.10;   // title letter spacing (em)
