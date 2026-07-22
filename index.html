@@ -617,7 +617,9 @@ async function renderDesign(image, city, region, canvas, W, H, bg) {
   const TITLE_Y      = P.titleY      ?? 0.815;  // title ink center (fraction of H)
   const SCRIPT_CAP   = P.scriptCap   ?? 0.042;  // script cap height (fraction of W)
   const SCRIPT_MAXW  = P.scriptMaxW  ?? 0.42;   // script shrinks past this width
-  const SCRIPT_TOP   = P.scriptTop   ?? 0.868;  // script ink TOP (fraction of H)
+  const SCRIPT_TOP   = P.scriptTop   ?? 0.857;  // script ink TOP (fraction of H)
+  const TALL_ASPECT  = P.tallAspect  ?? 1.38;   // H/W at/above which a page counts as "tall narrow"
+  const TALL_SHIFT   = P.tallShift   ?? 0.02;   // tall pages: art band drops by this fraction of H, toward the text
 
   // Artwork: scaled to fill the full vertical art region (so it occupies a
   // consistent band on every ratio — no "vertical lean"), centered. The top and
@@ -632,7 +634,11 @@ async function renderDesign(image, city, region, canvas, W, H, bg) {
   // refW == W and nothing changes.
   let refW = W;
   if (image) {
-    const regionTop = H * ART_TOP;
+    // Tall narrow pages (2:3, 5:7, A-series…) leave more air between the art
+    // and the title than the squarer ratios do, so the whole art band drops
+    // toward the text; band height (and so art scale) is unchanged.
+    const artShift = H / W >= TALL_ASPECT ? TALL_SHIFT : 0;
+    const regionTop = H * (ART_TOP + artShift);
     const regionH = H * (ART_BOTTOM - ART_TOP);
     const isSquare = Math.abs(W - H) < 2;
     if (isSquare) {
@@ -700,7 +706,13 @@ async function renderDesign(image, city, region, canvas, W, H, bg) {
     const m = ctx.measureText(regionText);
     ctx.textAlign = "center";
     ctx.textBaseline = "alphabetic";
-    const y = H * SCRIPT_TOP + m.actualBoundingBoxAscent;
+    // Optical settle: words whose ink is unusually compact (short caps, no
+    // ascender/descender strokes — e.g. "Mexico") would leave all their missing
+    // height as white space below the pinned ink top, floating the composition.
+    // Drop such words by half the deficit against the font's typical ink height.
+    const inkH = m.actualBoundingBoxAscent + m.actualBoundingBoxDescent;
+    const settle = Math.max(0, (size * (P.scriptNomInk ?? 0.68) - inkH) * (P.scriptSettle ?? 0.5));
+    const y = H * SCRIPT_TOP + m.actualBoundingBoxAscent + settle;
     // The script's own strokes are thin; a proportional outline thickens them so
     // the weight reads consistently after JPEGs are downsampled to thumbnails
     // (thin strokes otherwise render lighter at heavy downscales).

@@ -53,10 +53,14 @@ SLV  silver
 ## Hosted print files (Cloudflare R2)
 
 ```
-https://prints.premiumtravelart.com/{artworkID}/{size}
+https://t8345453tf5.com/{artworkID}/{size}
 ```
 
-Example: `https://prints.premiumtravelart.com/SHOPIFY8236481/18X24`
+Example: `https://t8345453tf5.com/SHOPIFY8236481/18X24`
+
+(`t8345453tf5.com` is a dedicated print-hosting domain — GoDaddy-registered,
+DNS on Cloudflare, attached to the R2 bucket as a custom domain. It serves
+nothing else: no email, no www, no site.)
 
 - One file per artworkID × size. **Frame does not appear in the URL** — all
   frame variants of a SKU print from the same artwork file.
