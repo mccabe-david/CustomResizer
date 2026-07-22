@@ -610,8 +610,8 @@ async function renderDesign(image, city, region, canvas, W, H, bg) {
   const P = (typeof window !== "undefined" && window.__layout) || {};
   const ART_TOP      = P.artTop      ?? 0.075;  // art region top (fraction of H)
   const ART_BOTTOM   = P.artBottom   ?? 0.735;  // art region bottom; text sits below
-  const MAX_SIDE_CROP = P.maxSideCrop ?? 0.15;  // most the art may crop off EACH side
-  const TITLE_BASE   = P.titleBase   ?? 82;     // title px on a 1500px-wide canvas
+  const SIDE_MARGIN  = P.sideMargin  ?? 0.08;   // white margin kept on EACH side (non-square)
+  const TITLE_BASE   = P.titleBase   ?? 95;     // title px on a 1500px-wide canvas (short names)
   const TITLE_MAXW   = P.titleMaxW   ?? 0.72;   // title shrinks past this width
   const TITLE_TRACK  = P.titleTrack  ?? 0.25;   // title letter spacing (em)
   const TITLE_Y      = P.titleY      ?? 0.815;  // title ink center (fraction of H)
@@ -634,15 +634,32 @@ async function renderDesign(image, city, region, canvas, W, H, bg) {
   if (image) {
     const regionTop = H * ART_TOP;
     const regionH = H * (ART_BOTTOM - ART_TOP);
-    let scale = regionH / image.height;          // fill the vertical region
-    let w = image.width * scale;
-    const maxW = W / (1 - 2 * MAX_SIDE_CROP);     // cap how much gets cropped off the sides
-    if (w > maxW) { scale = maxW / image.width; w = image.width * scale; }
-    const h = image.height * scale;
-    const x = Math.round((W - w) / 2);            // centered; negative x crops the sides
-    const y = Math.round(regionTop + (regionH - h) / 2);
-    ctx.drawImage(image, x, y, Math.round(w), Math.round(h));
-    refW = Math.min(w, W);
+    const isSquare = Math.abs(W - H) < 2;
+    if (isSquare) {
+      // Square pages: contain the art (no crop) within the region, keeping the
+      // balanced margins that result — the approved square look.
+      const scale = Math.min((W * (1 - 2 * SIDE_MARGIN)) / image.width, regionH / image.height);
+      const w = Math.round(image.width * scale);
+      const h = Math.round(image.height * scale);
+      ctx.drawImage(image, Math.round((W - w) / 2), Math.round(regionTop + (regionH - h) / 2), w, h);
+      refW = w;
+    } else {
+      // Other pages: keep a white margin on each side, but fill the vertical
+      // region and crop whatever overflows — the art is "pulled up" and cut off
+      // at the box edges rather than shrunk, so it stays large without touching
+      // the sides.
+      const boxW = W * (1 - 2 * SIDE_MARGIN);
+      const boxX = (W - boxW) / 2;
+      const scale = Math.max(boxW / image.width, regionH / image.height);
+      const w = image.width * scale, h = image.height * scale;
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(boxX, regionTop, boxW, regionH);
+      ctx.clip();
+      ctx.drawImage(image, boxX + (boxW - w) / 2, regionTop + (regionH - h) / 2, Math.round(w), Math.round(h));
+      ctx.restore();
+      refW = boxW;
+    }
   }
 
   ctx.fillStyle = INK;
@@ -686,7 +703,7 @@ async function renderDesign(image, city, region, canvas, W, H, bg) {
     // The script's own strokes are thin; a proportional outline thickens them so
     // the weight reads consistently after JPEGs are downsampled to thumbnails
     // (thin strokes otherwise render lighter at heavy downscales).
-    const weight = size * (P.scriptWeight ?? 0.014);
+    const weight = size * (P.scriptWeight ?? 0.008);
     if (weight > 0) {
       ctx.lineJoin = "round";
       ctx.lineWidth = weight;
